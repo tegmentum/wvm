@@ -1,0 +1,16 @@
+[workspace]
+resolver = "2"
+members = ["crates/wvm-core", "crates/wvm-app", "crates/wvm"]
+# wvm-app only builds for wasm32-wasip2 (via the Makefile); keep it out of the
+# default native `cargo build`.
+default-members = ["crates/wvm-core", "crates/wvm"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/tegmentum/wvm"
+
+[profile.release]
+strip = true
+opt-level = "z"

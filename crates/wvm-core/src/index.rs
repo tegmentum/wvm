@@ -1,0 +1,127 @@
+//! Index abstraction over the backlink/metadata database.
+//!
+//! Implemented natively with `rusqlite` and in the app via the
+//! `sqlite:wasm/high-level` component. The index is a derived cache: the store
+//! and manifests on disk are authoritative, and [`reindex`] rebuilds it from
+//! them.
+
+use crate::layout::{Layout, WASMTIME};
+use crate::manifest::Manifest;
+use anyhow::Result;
+
+/// Summary statistics for `wvm gc` / `wvm objects` reporting.
+#[derive(Debug, Default, Clone)]
+pub struct Stats {
+    pub objects: i64,
+    pub referenced: i64,
+    pub total_size: i64,
+}
+
+/// Primitive operations the index backends must provide. Higher-level routines
+/// such as [`reindex`] are built on top of these.
+pub trait Index {
+    /// Drop all rows (before a full rebuild).
+    fn clear(&mut self) -> Result<()>;
+
+    /// Insert or update a store object's recorded size.
+    fn upsert_object(&mut self, digest: &str, size: i64) -> Result<()>;
+
+    /// Remove an object row (after its file has been pruned).
+    fn delete_object(&mut self, digest: &str) -> Result<()>;
+
+    /// Record (or refresh) an installed version and its object backlinks.
+    fn record_install(&mut self, manifest: &Manifest, installed_at: i64) -> Result<()>;
+
+    /// Forget a version and its backlinks.
+    fn remove_version(&mut self, runtime: &str, version: &str) -> Result<()>;
+
+    /// Objects with no backlinks, as `(digest, size)` — GC candidates.
+    fn unreferenced_objects(&self) -> Result<Vec<(String, i64)>>;
+
+    /// All stored objects as `(digest, size)`, largest first.
+    fn all_objects(&self) -> Result<Vec<(String, i64)>>;
+
+    /// Versions referencing an object, as `(runtime, version)` pairs.
+    fn backlinks(&self, digest: &str) -> Result<Vec<(String, String)>>;
+
+    /// Aggregate counts/sizes.
+    fn stats(&self) -> Result<Stats>;
+}
+
+/// Rebuild the index from the authoritative on-disk state: every object file in
+/// the store and every installed version's manifest. Correct even if the index
+/// drifted or was deleted; also records orphaned objects from interrupted
+/// installs so GC can reclaim them.
+pub fn reindex<I: Index>(index: &mut I, layout: &Layout) -> Result<()> {
+    index.clear()?;
+
+    // 1. Every real object file (catches orphans).
+    let store_dir = layout.store_dir();
+    if store_dir.exists() {
+        for file in walk_files(&store_dir)? {
+            let name = match file.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n.to_string(),
+                None => continue,
+            };
+            if name.starts_with(".tmp-") {
+                continue;
+            }
+            let size = std::fs::metadata(&file).map(|m| m.len()).unwrap_or(0);
+            index.upsert_object(&name, size as i64)?;
+        }
+    }
+
+    // 2. Every installed version + backlinks from its manifest.
+    let versions_dir = layout.versions_dir(WASMTIME);
+    if versions_dir.exists() {
+        for entry in std::fs::read_dir(&versions_dir)? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            let manifest_path = entry.path().join("manifest.json");
+            if !manifest_path.is_file() {
+                continue;
+            }
+            let manifest = Manifest::read(&manifest_path)?;
+            let installed_at = mtime_epoch(&manifest_path);
+            index.record_install(&manifest, installed_at)?;
+        }
+    }
+    Ok(())
+}
+
+/// File modification time as unix seconds (0 if unavailable).
+fn mtime_epoch(path: &std::path::Path) -> i64 {
+    use std::time::UNIX_EPOCH;
+    std::fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// Recursively collect regular files under `dir`.
+pub fn walk_files(dir: &std::path::Path) -> Result<Vec<std::path::PathBuf>> {
+    use anyhow::Context;
+    let mut out = Vec::new();
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for entry in std::fs::read_dir(&d)
+            .with_context(|| format!("reading {}", d.display()))?
+        {
+            let entry = entry?;
+            if entry.file_type()?.is_dir() {
+                stack.push(entry.path());
+            } else {
+                out.push(entry.path());
+            }
+        }
+    }
+    Ok(out)
+}

@@ -1,0 +1,22 @@
+[package]
+name = "wvm-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Shared WVM logic: layout, CAS store, manifests, archives, discovery"
+
+[dependencies]
+anyhow = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+sha2 = "0.10"
+hex = "0.4"
+lzma-rs = "0.3"
+tar = "0.4"
+
+# Home-directory fallback is only meaningful on native hosts; the wasm app
+# always receives WVM_HOME from the bootstrapper.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+dirs = "5"
