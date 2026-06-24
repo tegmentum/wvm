@@ -7,10 +7,20 @@ use crate::index_component::ComponentIndex;
 use crate::install;
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::HashSet;
+use std::path::Path;
+use wvm_core::appmanifest::AppManifest;
 use wvm_core::index::{reindex, Index};
 use wvm_core::layout::{Layout, WASMTIME};
 use wvm_core::manifest::Manifest;
 use wvm_core::{discovery, human_bytes, normalize_version, version_cmp};
+
+fn now_epoch() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
+}
 
 /// Open the index DB through the SQLite component.
 pub fn open_index(layout: &Layout) -> Result<ComponentIndex> {
@@ -189,7 +199,7 @@ wvm() {
 }
 "#;
 
-pub fn uninstall(version_arg: &str) -> Result<()> {
+pub fn uninstall(version_arg: &str, force: bool) -> Result<()> {
     let layout = Layout::discover()?;
     let version = normalize_version(version_arg);
 
@@ -201,6 +211,25 @@ pub fn uninstall(version_arg: &str) -> Result<()> {
     if !dir.exists() {
         bail!("wasmtime {version} is not installed");
     }
+
+    // Gate on registered application dependencies.
+    let dependents = open_index(&layout)
+        .and_then(|idx| idx.apps_using(&version))
+        .unwrap_or_default();
+    if !dependents.is_empty() {
+        if !force {
+            bail!(
+                "wasmtime {version} is required by registered app(s): {}.\n\
+                 Migrate them or re-run with --force to remove anyway.",
+                dependents.join(", ")
+            );
+        }
+        eprintln!(
+            "warning: removing wasmtime {version} still required by: {}",
+            dependents.join(", ")
+        );
+    }
+
     std::fs::remove_dir_all(&dir)
         .with_context(|| format!("removing {}", dir.display()))?;
 
@@ -342,6 +371,87 @@ pub fn objects() -> Result<()> {
 }
 
 // --- helpers -------------------------------------------------------------
+
+/// `wvm register <app-dir>` — read the app's `wvm.toml` `[app]` manifest and
+/// cache the dependency in wvm's index (advisory; the app never needs wvm).
+pub fn register(app_dir: &str) -> Result<()> {
+    let layout = Layout::discover()?;
+    let dir = Path::new(app_dir);
+    let manifest = AppManifest::read_dir(dir)?;
+
+    let mut index = open_index(&layout)?;
+    index.register_app(
+        &manifest.name,
+        Some(app_dir),
+        manifest.runtime_path.as_deref(),
+        &manifest.runtimes,
+        now_epoch(),
+    )?;
+
+    println!("Registered application '{}'", manifest.name);
+    if let Some(p) = &manifest.runtime_path {
+        println!("  custom runtime: {p}");
+    }
+    if !manifest.runtimes.is_empty() {
+        for v in &manifest.runtimes {
+            let note = if is_installed(&layout, v) { "" } else { "  (not installed)" };
+            println!("  runtime: {v}{note}");
+        }
+    }
+    Ok(())
+}
+
+/// `wvm unregister <name>` — drop an application's registration.
+pub fn unregister(name: &str) -> Result<()> {
+    let layout = Layout::discover()?;
+    let mut index = open_index(&layout)?;
+    if index.unregister_app(name)? {
+        println!("Unregistered application '{name}'");
+    } else {
+        bail!("no application named '{name}' is registered");
+    }
+    Ok(())
+}
+
+/// `wvm apps` — list registered applications and the runtimes they depend on.
+pub fn apps() -> Result<()> {
+    let layout = Layout::discover()?;
+    let index = open_index(&layout)?;
+    let apps = index.list_apps()?;
+    if apps.is_empty() {
+        println!("No applications registered. Register one with `wvm register <app-dir>`.");
+        return Ok(());
+    }
+
+    println!("Registered applications:");
+    for app in apps {
+        let mut parts: Vec<String> = Vec::new();
+        if !app.runtimes.is_empty() {
+            let versions = app
+                .runtimes
+                .iter()
+                .map(|v| {
+                    if is_installed(&layout, v) {
+                        v.clone()
+                    } else {
+                        format!("{v} (not installed)")
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            parts.push(format!("runtimes: {versions}"));
+        }
+        if let Some(p) = &app.runtime_path {
+            parts.push(format!("custom runtime: {p}"));
+        }
+        let detail = if parts.is_empty() { "(no runtimes)".to_string() } else { parts.join("; ") };
+        println!("  {}  {detail}", app.name);
+        if let Some(p) = &app.path {
+            println!("      at {p}");
+        }
+    }
+    Ok(())
+}
 
 pub fn seed_version(layout: &Layout) -> Option<String> {
     let text = std::fs::read_to_string(layout.seed_marker()).ok()?;

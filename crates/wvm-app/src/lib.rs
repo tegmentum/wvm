@@ -51,8 +51,17 @@ impl exports::wasi::cli::run::Guest for Component {
             },
             "deactivate" => commands::deactivate(),
             "shell-init" => commands::shell_init(),
+            "register" => match positional {
+                Some(dir) => commands::register(dir),
+                None => missing_arg("register <app-dir>"),
+            },
+            "unregister" => match positional {
+                Some(name) => commands::unregister(name),
+                None => missing_arg("unregister <name>"),
+            },
+            "apps" => commands::apps(),
             "uninstall" => match positional {
-                Some(v) => commands::uninstall(v),
+                Some(v) => commands::uninstall(v, flag("--force")),
                 None => missing_arg("uninstall <version>"),
             },
             "verify" => commands::verify(positional),
@@ -97,7 +106,10 @@ fn print_help() {
     println!("  use <version>        Switch the runtime for the current shell (needs shell-init)");
     println!("  deactivate           Clear the per-shell override (revert to default)");
     println!("  shell-init           Print the shell hook enabling per-shell `use`");
-    println!("  uninstall <version>  Remove an installed runtime");
+    println!("  uninstall <version>  Remove an installed runtime (--force past app deps)");
+    println!("  register <app-dir>   Record an app's runtime dependency (reads its wvm.toml)");
+    println!("  unregister <name>    Drop an application's registration");
+    println!("  apps                 List registered applications and their runtimes");
     println!("  verify [version]     Validate installation integrity");
     println!("  gc [--prune]         Report/reclaim unreferenced store objects");
     println!("  objects              List stored objects and their backlinks");

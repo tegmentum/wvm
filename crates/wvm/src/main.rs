@@ -23,7 +23,7 @@ fn main() {
 }
 
 fn run() -> Result<()> {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
 
     let layout = Layout::discover()?;
     std::fs::create_dir_all(&layout.root)
@@ -36,10 +36,26 @@ fn run() -> Result<()> {
         return exec_runtime(&layout, &args[1..]);
     }
 
+    // `register <app-dir>` reads a manifest outside WVM_HOME; preopen that
+    // directory for the app and pass it the canonical absolute path.
+    let extra_dir = register_dir(&mut args);
+
     materialize_app(&layout)?;
     let _seed_version = seed::ensure(&layout)?;
 
-    launch_app(&layout, &args)
+    launch_app(&layout, &args, extra_dir.as_deref())
+}
+
+/// For `register <dir>`, canonicalize the directory argument (rewriting it in
+/// place) and return it so the bootstrapper can preopen it for the app.
+fn register_dir(args: &mut [String]) -> Option<std::path::PathBuf> {
+    if args.first().map(String::as_str) != Some("register") {
+        return None;
+    }
+    let idx = args.iter().skip(1).position(|a| !a.starts_with('-'))? + 1;
+    let abs = std::fs::canonicalize(&args[idx]).ok()?;
+    args[idx] = abs.to_string_lossy().into_owned();
+    Some(abs)
 }
 
 /// `wvm exec [--] <args>` — resolve the user's selected runtime and replace
@@ -96,8 +112,9 @@ fn materialize_app(layout: &Layout) -> Result<()> {
     Ok(())
 }
 
-/// Run the app component on the seed Wasmtime, forwarding `args`.
-fn launch_app(layout: &Layout, args: &[String]) -> Result<()> {
+/// Run the app component on the seed Wasmtime, forwarding `args`. `extra_dir`,
+/// when set, is preopened in addition to `WVM_HOME` (used by `register`).
+fn launch_app(layout: &Layout, args: &[String], extra_dir: Option<&Path>) -> Result<()> {
     let seed_bin = layout.seed_bin();
     let app_wasm = layout.app_wasm();
     let home = layout.root.to_str().context("WVM_HOME is not valid UTF-8")?;
@@ -114,6 +131,9 @@ fn launch_app(layout: &Layout, args: &[String]) -> Result<()> {
         .arg(format!("WVM_HOST_ARCH={}", std::env::consts::ARCH))
         .arg("--env")
         .arg(format!("WVM_HOST_OS={}", std::env::consts::OS));
+    if let Some(dir) = extra_dir.and_then(|d| d.to_str()) {
+        cmd.arg("--dir").arg(format!("{dir}::{dir}"));
+    }
     if let Ok(v) = std::env::var("WVM_VERBOSE") {
         cmd.arg("--env").arg(format!("WVM_VERBOSE={v}"));
     }

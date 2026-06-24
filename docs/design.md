@@ -565,6 +565,57 @@ all further work — including installing additional runtimes — over `wasi:htt
 
 ---
 
+## Application Registration
+
+WVM is the foundation of a Tegmentum install, so it tracks which applications
+depend on which runtimes. This makes it possible to know whether a runtime is
+safe to remove and which applications are behind and need to move forward.
+
+### Loose coupling (non-negotiable)
+
+Applications must **not** depend on wvm at runtime, and may supply their own
+custom runtime. Therefore:
+
+- The **manifest is canonical and app-owned**: an app declares its runtimes in
+  the `[app]` section of its `wvm.toml`, which the app reads itself. It runs
+  with no wvm present.
+- **Registration is advisory bookkeeping**: `wvm register <app-dir>` reads that
+  manifest and caches it in wvm's index. Registration is optional and only
+  informs wvm's lifecycle decisions; it never becomes a runtime dependency.
+
+```toml
+[app]
+name = "tegmentum-foo"
+runtimes = ["44.0.0", "45.0.0"]            # wvm-managed versions tested against
+# runtime-path = "/opt/foo/bin/wasmtime"   # OR a custom runtime the app supplies
+```
+
+### Index (cache)
+
+```text
+apps(name PRIMARY KEY, path, runtime_path, registered_at)
+app_runtimes(app -> apps, version)         # app depends on a wvm-managed version
+```
+
+An app that sets `runtime-path` is fully decoupled — it is recorded for
+visibility but has no `app_runtimes` rows and pins no wvm-managed runtime.
+
+### Lifecycle
+
+- `wvm uninstall <version>` refuses when a registered app depends on it (listing
+  the dependents); `--force` overrides. `gc` is inherently safe: an installed
+  runtime's objects are always referenced, so it only ever reclaims objects of
+  versions already uninstalled.
+- `wvm apps` lists registered applications and their runtimes (annotating any
+  not currently installed). It does not auto-flag migrations — the operator
+  judges what to move forward.
+
+Because the bootstrapper sandboxes the app to `WVM_HOME`, `wvm register <dir>`
+is given an additional preopen of the (canonicalized) app directory so the app
+can read the manifest there.
+
+---
+
 ## Future Expansion
 
 Potential future capabilities:

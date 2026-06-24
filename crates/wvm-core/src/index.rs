@@ -17,6 +17,19 @@ pub struct Stats {
     pub total_size: i64,
 }
 
+/// A registered application and the runtimes it depends on (a cache of the
+/// app's own manifest).
+#[derive(Debug, Clone)]
+pub struct AppRecord {
+    pub name: String,
+    /// App directory the manifest was read from.
+    pub path: Option<String>,
+    /// Custom runtime the app supplies itself (decoupled from wvm).
+    pub runtime_path: Option<String>,
+    /// wvm-managed versions the app was tested against.
+    pub runtimes: Vec<String>,
+}
+
 /// Primitive operations the index backends must provide. Higher-level routines
 /// such as [`reindex`] are built on top of these.
 pub trait Index {
@@ -46,6 +59,27 @@ pub trait Index {
 
     /// Aggregate counts/sizes.
     fn stats(&self) -> Result<Stats>;
+
+    // --- application registration (lifecycle bookkeeping) ----------------
+
+    /// Register (or refresh) an application and the runtimes it depends on.
+    fn register_app(
+        &mut self,
+        name: &str,
+        path: Option<&str>,
+        runtime_path: Option<&str>,
+        runtimes: &[String],
+        registered_at: i64,
+    ) -> Result<()>;
+
+    /// Remove a registration. Returns true if an app was removed.
+    fn unregister_app(&mut self, name: &str) -> Result<bool>;
+
+    /// All registered applications.
+    fn list_apps(&self) -> Result<Vec<AppRecord>>;
+
+    /// Names of applications that depend on a given runtime version.
+    fn apps_using(&self, version: &str) -> Result<Vec<String>>;
 }
 
 /// Rebuild the index from the authoritative on-disk state: every object file in

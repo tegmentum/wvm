@@ -53,7 +53,10 @@ reverts it to the default.
 | --- | --- |
 | `wvm install <version>` | Install a runtime (`latest` for the newest). `--default` to set it as default. |
 | `wvm list [--all]` | List all available versions (most recent first); installed/default/seed marked. `--all` includes prereleases. |
-| `wvm uninstall <version>` | Remove an installed runtime (the seed cannot be removed). |
+| `wvm uninstall <version>` | Remove an installed runtime (`--force` past app deps; the seed cannot be removed). |
+| `wvm register <app-dir>` | Record an app's runtime dependency from its `wvm.toml` `[app]`. |
+| `wvm unregister <name>` | Drop an application's registration. |
+| `wvm apps` | List registered applications and the runtimes they depend on. |
 | `wvm default <version>` | Set the persistent default (used by new shells). |
 | `wvm use <version>` | Switch the runtime for the current shell (needs `shell-init`). |
 | `wvm deactivate` | Clear the per-shell override, reverting to the default. |
@@ -105,6 +108,31 @@ downloaded on bootstrap rather than bundled.
 5. **System / PATH** — a `wasmtime` already on `PATH`.
 
 Set `WVM_VERBOSE=1` to print which runtime was selected.
+
+## Application registration
+
+Applications can declare which Wasmtime version(s) they were tested against, so
+wvm knows whether a runtime is safe to remove and which apps are behind. An app
+owns a small manifest (the `[app]` section of its `wvm.toml`) that it reads
+itself — so it works with **no wvm installed** and may bring its own runtime:
+
+```toml
+[app]
+name = "tegmentum-foo"
+runtimes = ["44.0.0", "45.0.0"]        # wvm-managed versions tested against
+# runtime-path = "/opt/foo/bin/wasmtime"   # OR a custom runtime the app supplies
+```
+
+```sh
+wvm register ./my-app     # reads my-app/wvm.toml and records the dependency
+wvm apps                  # list registered apps and their runtimes
+```
+
+Registration is **advisory bookkeeping** — apps never depend on wvm at runtime.
+With it, `wvm uninstall <version>` refuses to remove a runtime a registered app
+still needs (listing the dependents; `--force` overrides). An app that sets
+`runtime-path` is fully decoupled: it's recorded for visibility but pins no
+wvm-managed runtime.
 
 ## Storage layout
 

@@ -6,6 +6,7 @@
 //! behind the [`http::Http`] and [`index::Index`] traits, implemented natively
 //! in the `wvm` binary and over WASI/the SQLite component in `wvm-app`.
 
+pub mod appmanifest;
 pub mod archive;
 pub mod config;
 pub mod discovery;
