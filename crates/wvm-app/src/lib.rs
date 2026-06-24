@@ -10,6 +10,7 @@ mod commands;
 mod http_wasi;
 mod index_component;
 mod install;
+mod progress;
 
 wit_bindgen::generate!({
     world: "app",
@@ -34,16 +35,22 @@ impl exports::wasi::cli::run::Guest for Component {
 
         let result = match cmd {
             "install" => match positional {
-                Some(v) => install::install(v, flag("--use")),
+                Some(v) => install::install(v, flag("--default") || flag("--use")),
                 None => missing_arg("install <version>"),
             },
-            "list" => commands::list(),
+            "list" => commands::list(flag("--all")),
             "current" => commands::current(),
             "path" => commands::path(positional),
+            "default" => match positional {
+                Some(v) => commands::set_default(v),
+                None => missing_arg("default <version>"),
+            },
             "use" => match positional {
                 Some(v) => commands::use_version(v),
                 None => missing_arg("use <version>"),
             },
+            "deactivate" => commands::deactivate(),
+            "shell-init" => commands::shell_init(),
             "uninstall" => match positional {
                 Some(v) => commands::uninstall(v),
                 None => missing_arg("uninstall <version>"),
@@ -82,11 +89,14 @@ fn print_help() {
     println!("wvm — WebAssembly Version Manager");
     println!();
     println!("Commands:");
-    println!("  install <version>    Install a runtime (`latest` for newest; --use to activate)");
-    println!("  list                 List installed runtimes");
-    println!("  current              Show the active runtime version");
+    println!("  install <version>    Install a runtime (`latest` for newest; --default to set default)");
+    println!("  list [--all]         List all available versions (installed ones marked)");
+    println!("  current              Show the effective runtime version (session or default)");
     println!("  path [version]       Print a runtime's filesystem path");
-    println!("  use <version>        Select the active runtime");
+    println!("  default <version>    Set the persistent default (used by new shells)");
+    println!("  use <version>        Switch the runtime for the current shell (needs shell-init)");
+    println!("  deactivate           Clear the per-shell override (revert to default)");
+    println!("  shell-init           Print the shell hook enabling per-shell `use`");
     println!("  uninstall <version>  Remove an installed runtime");
     println!("  verify [version]     Validate installation integrity");
     println!("  gc [--prune]         Report/reclaim unreferenced store objects");

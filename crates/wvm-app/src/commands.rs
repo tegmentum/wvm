@@ -4,7 +4,9 @@
 //! `sqlite:wasm/high-level` component via [`ComponentIndex`].
 
 use crate::index_component::ComponentIndex;
+use crate::install;
 use anyhow::{anyhow, bail, Context, Result};
+use std::collections::HashSet;
 use wvm_core::index::{reindex, Index};
 use wvm_core::layout::{Layout, WASMTIME};
 use wvm_core::manifest::Manifest;
@@ -19,39 +21,80 @@ pub fn open_index(layout: &Layout) -> Result<ComponentIndex> {
     ComponentIndex::open(path)
 }
 
-pub fn list() -> Result<()> {
+/// `wvm list [--all]` — one list of all available versions (most recent first),
+/// with installed ones marked. Falls back to installed-only when offline.
+pub fn list(all: bool) -> Result<()> {
     let layout = Layout::discover()?;
     layout.ensure_base()?;
 
-    // Reconcile the index from disk (also exercises the SQLite component).
-    let mut index = open_index(&layout)?;
-    reindex(&mut index, &layout)?;
+    let seed = seed_version(&layout);
+    let default = discovery::default_version(&layout);
+    let effective = discovery::effective_version(&layout);
 
-    if let Some(seed) = seed_version(&layout) {
-        println!("Seed runtime (protected)");
-        println!("  {seed}  [seed]");
+    let installed = installed_versions(&layout)?;
+    let installed_set: HashSet<&str> = installed.iter().map(String::as_str).collect();
+
+    // Try the remote list; fall back to installed-only when offline.
+    let (mut versions, offline) = match install::fetch_release_versions(all) {
+        Ok(mut v) => {
+            for i in &installed {
+                if !v.contains(i) {
+                    v.push(i.clone());
+                }
+            }
+            (v, false)
+        }
+        Err(e) => {
+            eprintln!("warning: could not fetch available versions ({e}); showing installed only");
+            (installed.clone(), true)
+        }
+    };
+    versions.sort_by(|a, b| version_cmp(b, a)); // most recent first
+    versions.dedup();
+
+    if versions.is_empty() {
+        println!("No runtimes available. Try again with a network connection.");
+        return Ok(());
     }
 
-    let versions = installed_versions(&layout)?;
-    let active = discovery::active_version(&layout);
-    if versions.is_empty() {
-        println!("No user runtimes installed. Try `wvm install latest`.");
-    } else {
-        println!("Installed Runtimes");
-        for v in versions {
-            let marker = if active.as_deref() == Some(v.as_str()) { "*" } else { " " };
-            println!("{marker} {v}");
+    println!("Wasmtime runtimes  (* current; tags: installed, default, seed)");
+    for v in &versions {
+        let is_current = effective.as_ref().map(|(e, _)| e == v).unwrap_or(false);
+        let marker = if is_current { "*" } else { " " };
+        let mut tags: Vec<&str> = Vec::new();
+        if seed.as_deref() == Some(v.as_str()) {
+            tags.push("seed");
         }
+        if installed_set.contains(v.as_str()) {
+            tags.push("installed");
+        }
+        if default.as_deref() == Some(v.as_str()) {
+            tags.push("default");
+        }
+        let suffix = if tags.is_empty() {
+            String::new()
+        } else {
+            format!("  [{}]", tags.join(", "))
+        };
+        println!("{marker} {v}{suffix}");
+    }
+    if offline {
+        eprintln!("(offline: only installed versions shown)");
     }
     Ok(())
 }
 
 pub fn current() -> Result<()> {
     let layout = Layout::discover()?;
-    match discovery::active_version(&layout) {
-        Some(v) => println!("{v}"),
+    match discovery::effective_version(&layout) {
+        Some((v, source)) => {
+            println!("{v}");
+            if std::env::var_os("WVM_VERBOSE").is_some() {
+                eprintln!("(via {source})");
+            }
+        }
         None => {
-            eprintln!("no active runtime (use `wvm use <version>`)");
+            eprintln!("no default runtime set (use `wvm default <version>`)");
             std::process::exit(1);
         }
     }
@@ -62,8 +105,9 @@ pub fn path(version: Option<&str>) -> Result<()> {
     let layout = Layout::discover()?;
     let version = match version {
         Some(v) => normalize_version(v),
-        None => discovery::active_version(&layout)
-            .ok_or_else(|| anyhow!("no active runtime; pass a version or run `wvm use <version>`"))?,
+        None => discovery::effective_version(&layout)
+            .map(|(v, _)| v)
+            .ok_or_else(|| anyhow!("no default runtime; pass a version or run `wvm default <version>`"))?,
     };
     let dir = layout.version_dir(WASMTIME, &version);
     if !dir.exists() {
@@ -73,16 +117,77 @@ pub fn path(version: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+/// `wvm default <version>` — set the persistent default (used by new shells).
+pub fn set_default(version_arg: &str) -> Result<()> {
+    let layout = Layout::discover()?;
+    let version = normalize_version(version_arg);
+    if !is_installed(&layout, &version) {
+        bail!("wasmtime {version} is not installed; run `wvm install {version}`");
+    }
+    discovery::set_default_version(&layout, &version)?;
+    println!("Default is now wasmtime {version} (used by new shells)");
+    Ok(())
+}
+
+/// `wvm use <version>` — switch the runtime for the **current shell only**.
+///
+/// A binary cannot change its parent shell's environment, so when run under the
+/// shell hook (stdout captured) this prints `export WVM_VERSION=<v>` for the
+/// hook to `eval`; when run directly in a terminal it explains how to enable the
+/// hook.
 pub fn use_version(version_arg: &str) -> Result<()> {
     let layout = Layout::discover()?;
     let version = normalize_version(version_arg);
     if !is_installed(&layout, &version) {
         bail!("wasmtime {version} is not installed; run `wvm install {version}`");
     }
-    discovery::set_active_version(&layout, &version)?;
-    println!("Now using wasmtime {version}");
+
+    if crate::progress::stdout_is_terminal() {
+        eprintln!("wasmtime {version} is installed.");
+        eprintln!("`wvm use` switches the runtime for the current shell, which needs the shell hook:");
+        eprintln!("    wvm shell-init >> ~/.zshrc   # once, then restart your shell");
+        eprintln!("Then `wvm use {version}` applies to this shell. For the persistent default: `wvm default {version}`.");
+    } else {
+        println!("export {}={version}", discovery::SESSION_VAR);
+        eprintln!("Now using wasmtime {version} (this shell)");
+    }
     Ok(())
 }
+
+/// `wvm deactivate` — clear the per-shell override (revert to the default).
+pub fn deactivate() -> Result<()> {
+    let layout = Layout::discover()?;
+    if crate::progress::stdout_is_terminal() {
+        eprintln!("`wvm deactivate` clears the per-shell override and needs the shell hook (`wvm shell-init`).");
+    } else {
+        println!("unset {}", discovery::SESSION_VAR);
+        match discovery::default_version(&layout) {
+            Some(d) => eprintln!("Reverted to default (wasmtime {d}) for this shell"),
+            None => eprintln!("Cleared session override (no default set)"),
+        }
+    }
+    Ok(())
+}
+
+/// `wvm shell-init` — print the shell function enabling per-shell `wvm use`.
+pub fn shell_init() -> Result<()> {
+    print!("{SHELL_HOOK}");
+    Ok(())
+}
+
+const SHELL_HOOK: &str = r#"# wvm shell integration — add to ~/.zshrc or ~/.bashrc
+wvm() {
+  case "$1" in
+    use|deactivate)
+      local __wvm_out
+      __wvm_out="$(command wvm "$@")" || return $?
+      [ -n "$__wvm_out" ] && eval "$__wvm_out"
+      ;;
+    *)
+      command wvm "$@" ;;
+  esac
+}
+"#;
 
 pub fn uninstall(version_arg: &str) -> Result<()> {
     let layout = Layout::discover()?;
@@ -103,9 +208,9 @@ pub fn uninstall(version_arg: &str) -> Result<()> {
         let _ = index.remove_version(WASMTIME, &version);
     }
 
-    if discovery::active_version(&layout).as_deref() == Some(version.as_str()) {
-        let _ = std::fs::remove_file(layout.active_file(WASMTIME));
-        eprintln!("note: {version} was the active runtime; no runtime is active now");
+    if discovery::default_version(&layout).as_deref() == Some(version.as_str()) {
+        let _ = std::fs::remove_file(layout.default_file(WASMTIME));
+        eprintln!("note: {version} was the default; no default is set now");
     }
     println!("Uninstalled wasmtime {version}");
     println!("Run `wvm gc --prune` to reclaim unreferenced store objects.");

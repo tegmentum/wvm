@@ -117,6 +117,11 @@ fn launch_app(layout: &Layout, args: &[String]) -> Result<()> {
     if let Ok(v) = std::env::var("WVM_VERBOSE") {
         cmd.arg("--env").arg(format!("WVM_VERBOSE={v}"));
     }
+    // Forward the per-session override so the app reflects it in
+    // list/current and resolution.
+    if let Ok(v) = std::env::var(wvm_core::discovery::SESSION_VAR) {
+        cmd.arg("--env").arg(format!("{}={v}", wvm_core::discovery::SESSION_VAR));
+    }
     // Everything after the module path is passed to the guest as argv[1..].
     cmd.arg(&app_wasm);
     cmd.args(args);

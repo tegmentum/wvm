@@ -22,20 +22,43 @@ runs as a WebAssembly component on it.
 ## Quickstart
 
 ```sh
+wvm list                # all available versions (installed ones marked)
 wvm install latest      # download (over wasi:http) + verify + install
-wvm use latest          # make it the active runtime
+wvm default latest      # default runtime for new shells
 wvm exec -- --version   # run the selected runtime
 ```
+
+Long operations show a progress bar / spinner on stderr when attached to a
+terminal, and fall back to plain milestone lines when output is piped.
+
+## Default vs. per-shell version
+
+- `wvm default <version>` sets the **persistent default** used by new shells.
+- `wvm use <version>` switches the runtime for the **current shell only**
+  (reverting when you open a new one), via a `WVM_VERSION` environment variable.
+
+Because `wvm` is a binary it can't change its parent shell directly, so per-shell
+`use` needs a one-time shell hook (like nvm/pyenv):
+
+```sh
+wvm shell-init >> ~/.zshrc   # then restart your shell
+```
+
+After that, `wvm use 44.0.0` applies to the current shell and `wvm deactivate`
+reverts it to the default.
 
 ## Commands
 
 | Command | Description |
 | --- | --- |
-| `wvm install <version>` | Install a runtime (`latest` for the newest). `--use` to activate it. |
+| `wvm install <version>` | Install a runtime (`latest` for the newest). `--default` to set it as default. |
+| `wvm list [--all]` | List all available versions (most recent first); installed/default/seed marked. `--all` includes prereleases. |
 | `wvm uninstall <version>` | Remove an installed runtime (the seed cannot be removed). |
-| `wvm list` | List installed runtimes (`*` marks the active one; the seed is shown separately). |
-| `wvm use <version>` | Select the active runtime. |
-| `wvm current` | Print the active version. |
+| `wvm default <version>` | Set the persistent default (used by new shells). |
+| `wvm use <version>` | Switch the runtime for the current shell (needs `shell-init`). |
+| `wvm deactivate` | Clear the per-shell override, reverting to the default. |
+| `wvm shell-init` | Print the shell hook that enables per-shell `use`. |
+| `wvm current` | Print the effective version (session override, else default). |
 | `wvm path [version]` | Print a runtime's filesystem path. |
 | `wvm exec -- <args>` | Run the selected runtime, forwarding arguments. |
 | `wvm verify [version]` | Validate installation integrity against manifests. |
@@ -76,9 +99,10 @@ downloaded on bootstrap rather than bundled.
    [wvm]
    runtime = "44.0.0"
    ```
-2. **Active runtime** — the version selected by `wvm use`.
-3. **Environment override** — `WASM_RUNTIME_HOME` or `WASMTIME_HOME`.
-4. **System / PATH** — a `wasmtime` already on `PATH`.
+2. **Session** — `WVM_VERSION`, set per shell by `wvm use`.
+3. **Default** — the persistent default set by `wvm default`.
+4. **Environment override** — `WASM_RUNTIME_HOME` or `WASMTIME_HOME`.
+5. **System / PATH** — a `wasmtime` already on `PATH`.
 
 Set `WVM_VERBOSE=1` to print which runtime was selected.
 
@@ -98,7 +122,7 @@ multiple versions share identical files:
     versions/44.0.0/
       bin/wasmtime                     # materialized from the store
       manifest.json
-    active                             # active version (plain text)
+    default                            # persistent default version (plain text)
   downloads/
   index.db                             # SQLite backlink/metadata index (rebuildable cache)
   wvm-app.wasm                         # the app component

@@ -67,10 +67,10 @@ impl Layout {
         self.version_dir(runtime, version).join("manifest.json")
     }
 
-    /// Plain-text file naming the active version for a runtime (wasm-friendly,
-    /// replaces the older `current` symlink).
-    pub fn active_file(&self, runtime: &str) -> PathBuf {
-        self.runtime_dir(runtime).join("active")
+    /// Plain-text file naming the persistent **default** version for a runtime
+    /// (what new shells use). A session can override it via `WVM_VERSION`.
+    pub fn default_file(&self, runtime: &str) -> PathBuf {
+        self.runtime_dir(runtime).join("default")
     }
 
     // --- Protected seed runtime ------------------------------------------

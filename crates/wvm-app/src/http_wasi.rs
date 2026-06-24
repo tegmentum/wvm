@@ -3,6 +3,7 @@
 //! `wasi:http` does not follow redirects, and GitHub redirects both API and
 //! release-asset requests, so this follows 3xx hops manually.
 
+use crate::progress::Bar;
 use anyhow::{anyhow, bail, Result};
 use std::path::Path;
 use waki::Client;
@@ -40,6 +41,62 @@ impl WasiHttp {
                 bail!("unexpected HTTP {status} for {current}");
             }
             return resp.body().map_err(|e| anyhow!("reading body of {current}: {e}"));
+        }
+        bail!("too many redirects starting from {url}")
+    }
+}
+
+impl WasiHttp {
+    /// Download `url` to `dest`, streaming the body and rendering a progress
+    /// bar labelled `label`. Returns bytes written.
+    pub fn download_with_progress(&self, url: &str, dest: &Path, label: &str) -> Result<u64> {
+        let mut current = url.to_string();
+        for _ in 0..MAX_REDIRECTS {
+            let resp = Client::new()
+                .get(&current)
+                .headers([("User-Agent", USER_AGENT)])
+                .send()
+                .map_err(|e| anyhow!("GET {current}: {e}"))?;
+
+            let status = resp.status_code();
+            if (300..400).contains(&status) {
+                let location = resp
+                    .header("location")
+                    .and_then(|v| v.to_str().ok())
+                    .ok_or_else(|| anyhow!("redirect {status} from {current} had no Location"))?;
+                current = resolve_url(&current, location);
+                continue;
+            }
+            if !(200..300).contains(&status) {
+                bail!("unexpected HTTP {status} for {current}");
+            }
+
+            let total = resp
+                .header("content-length")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|s| s.parse::<u64>().ok())
+                .unwrap_or(0);
+
+            let mut bar = Bar::new(label, total);
+            let mut buf: Vec<u8> = Vec::with_capacity(total as usize);
+            while let Some(chunk) = resp
+                .chunk(256 * 1024)
+                .map_err(|e| anyhow!("reading body of {current}: {e}"))?
+            {
+                if chunk.is_empty() {
+                    break;
+                }
+                buf.extend_from_slice(&chunk);
+                bar.set(buf.len() as u64);
+            }
+            bar.finish(&format!(
+                "{label} ({})",
+                wvm_core::human_bytes(buf.len() as u64)
+            ));
+
+            std::fs::write(dest, &buf)
+                .map_err(|e| anyhow!("writing {}: {e}", dest.display()))?;
+            return Ok(buf.len() as u64);
         }
         bail!("too many redirects starting from {url}")
     }

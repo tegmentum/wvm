@@ -538,6 +538,25 @@ it: `wvm uninstall <seed>` is refused and `wvm gc` only walks the object store,
 never the seed directory. Users still install and select their own runtimes
 independently.
 
+### Version selection: default vs. session
+
+Two layers, nvm-style:
+
+- **default** — persistent (`runtimes/wasmtime/default`), used by new shells;
+  set with `wvm default <version>`.
+- **session** — the `WVM_VERSION` environment variable, set per shell by
+  `wvm use <version>`, overriding the default for the current session only.
+
+Resolution order (`wvm exec` and `wvm current`): project pin (`wvm.toml`) →
+session (`WVM_VERSION`) → default → `WASMTIME_HOME` → `PATH`.
+
+Because `wvm` is a binary it cannot mutate its parent shell, so per-shell `use`
+relies on a shell hook (`wvm shell-init`): when `wvm use` runs with stdout
+captured by the hook it prints `export WVM_VERSION=<v>` for the shell to `eval`;
+run directly in a terminal it instead explains how to enable the hook. The
+`wvm list` command shows all available versions (from the GitHub releases),
+marking installed/default/seed — there is no separate remote-listing command.
+
 ### Why download-on-bootstrap
 
 The first runtime is fetched by native code because running the app requires a

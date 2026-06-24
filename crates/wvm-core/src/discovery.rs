@@ -1,4 +1,9 @@
-//! Runtime discovery: project pin, active runtime, env override, system/PATH.
+//! Runtime discovery: project pin, session override, default, env, PATH.
+//!
+//! Two layers of selection:
+//! - **default** — persistent (`runtimes/wasmtime/default`), used by new shells.
+//! - **session** — the `WVM_VERSION` environment variable, set per shell, which
+//!   overrides the default for the current session only.
 
 use crate::layout::{Layout, WASMTIME};
 use anyhow::{bail, Context, Result};
@@ -7,6 +12,9 @@ use std::path::{Path, PathBuf};
 
 /// Project pin file name, searched upward from the working directory.
 pub const PIN_FILE: &str = "wvm.toml";
+
+/// Environment variable carrying the per-session version override.
+pub const SESSION_VAR: &str = "WVM_VERSION";
 
 #[derive(Debug, Default, Deserialize)]
 struct PinFile {
@@ -25,8 +33,7 @@ pub struct Resolved {
     pub source: String,
 }
 
-/// Find a project pin by walking up from `start`. Returns the pinned version
-/// string and the file it was read from.
+/// Find a project pin by walking up from `start`.
 pub fn find_pin(start: &Path) -> Result<Option<(String, PathBuf)>> {
     let mut dir = Some(start);
     while let Some(d) = dir {
@@ -45,20 +52,16 @@ pub fn find_pin(start: &Path) -> Result<Option<(String, PathBuf)>> {
     Ok(None)
 }
 
-/// Read the active version from the active-version file, if set.
-pub fn active_version(layout: &Layout) -> Option<String> {
-    let text = std::fs::read_to_string(layout.active_file(WASMTIME)).ok()?;
+/// The persistent default version, if set.
+pub fn default_version(layout: &Layout) -> Option<String> {
+    let text = std::fs::read_to_string(layout.default_file(WASMTIME)).ok()?;
     let v = text.trim();
-    if v.is_empty() {
-        None
-    } else {
-        Some(v.to_string())
-    }
+    (!v.is_empty()).then(|| v.to_string())
 }
 
-/// Set the active version by writing the active-version file.
-pub fn set_active_version(layout: &Layout, version: &str) -> Result<()> {
-    let path = layout.active_file(WASMTIME);
+/// Write the persistent default version.
+pub fn set_default_version(layout: &Layout, version: &str) -> Result<()> {
+    let path = layout.default_file(WASMTIME);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -67,12 +70,29 @@ pub fn set_active_version(layout: &Layout, version: &str) -> Result<()> {
     Ok(())
 }
 
+/// The per-session override (`WVM_VERSION`), if set.
+pub fn session_version() -> Option<String> {
+    match std::env::var(SESSION_VAR) {
+        Ok(v) if !v.trim().is_empty() => Some(v.trim().to_string()),
+        _ => None,
+    }
+}
+
+/// The effective selected version and where it came from: session overrides
+/// default.
+pub fn effective_version(layout: &Layout) -> Option<(String, &'static str)> {
+    if let Some(v) = session_version() {
+        return Some((v, "session"));
+    }
+    default_version(layout).map(|v| (v, "default"))
+}
+
 fn binary_in_version(layout: &Layout, version: &str) -> PathBuf {
     layout.version_dir(WASMTIME, version).join("bin").join("wasmtime")
 }
 
-/// Resolve a wasmtime binary following the documented discovery order:
-/// project pin → active runtime → env override → system/PATH.
+/// Resolve a wasmtime binary following the discovery order:
+/// project pin → session (`WVM_VERSION`) → default → `WASMTIME_HOME` → PATH.
 pub fn resolve(layout: &Layout, cwd: &Path) -> Result<Resolved> {
     // 1. Project pin
     if let Some((version, file)) = find_pin(cwd)? {
@@ -89,15 +109,21 @@ pub fn resolve(layout: &Layout, cwd: &Path) -> Result<Resolved> {
         );
     }
 
-    // 2. Active runtime
-    if let Some(version) = active_version(layout) {
+    // 2. Session override, then 3. default.
+    for (version, src) in [
+        session_version().map(|v| (v, "session")),
+        default_version(layout).map(|v| (v, "default")),
+    ]
+    .into_iter()
+    .flatten()
+    {
         let bin = binary_in_version(layout, &version);
         if bin.exists() {
-            return Ok(Resolved { binary: bin, source: format!("active runtime ({version})") });
+            return Ok(Resolved { binary: bin, source: format!("{src} ({version})") });
         }
     }
 
-    // 3. Explicit environment variable
+    // 4. Explicit environment variable (path-based)
     for var in ["WASM_RUNTIME_HOME", "WASMTIME_HOME"] {
         if let Some(val) = std::env::var_os(var) {
             if val.is_empty() {
@@ -112,12 +138,12 @@ pub fn resolve(layout: &Layout, cwd: &Path) -> Result<Resolved> {
         }
     }
 
-    // 4 & 5. System runtime / PATH lookup
+    // 5. System runtime / PATH lookup
     if let Some(bin) = which("wasmtime") {
         return Ok(Resolved { binary: bin, source: "PATH".to_string() });
     }
 
-    bail!("no wasmtime runtime found (no project pin, active runtime, env override, or PATH entry); try `wvm install latest && wvm use latest`")
+    bail!("no wasmtime runtime found; try `wvm install latest` then `wvm default latest`")
 }
 
 /// Minimal PATH lookup for an executable.
