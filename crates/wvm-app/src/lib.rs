@@ -30,7 +30,11 @@ impl exports::wasi::cli::run::Guest for Component {
         let args: Vec<String> = std::env::args().collect();
         let cmd = args.get(1).map(String::as_str).unwrap_or("help");
         // First non-flag argument after the subcommand.
-        let positional = args.iter().skip(2).find(|a| !a.starts_with('-')).map(String::as_str);
+        let positional = args
+            .iter()
+            .skip(2)
+            .find(|a| !a.starts_with('-'))
+            .map(String::as_str);
         let flag = |name: &str| args.iter().skip(2).any(|a| a == name);
 
         let result = match cmd {
@@ -98,7 +102,9 @@ fn print_help() {
     println!("wvm — WebAssembly Version Manager");
     println!();
     println!("Commands:");
-    println!("  install <version>    Install a runtime (`latest` for newest; --default to set default)");
+    println!(
+        "  install <version>    Install a runtime (`latest` for newest; --default to set default)"
+    );
     println!("  list [--all]         List all available versions (installed ones marked)");
     println!("  current              Show the effective runtime version (session or default)");
     println!("  path [version]       Print a runtime's filesystem path");

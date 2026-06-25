@@ -38,7 +38,9 @@ pub struct Config {
 
 impl Default for Config {
     fn default() -> Self {
-        Config { materialization: Materialization::Symlink }
+        Config {
+            materialization: Materialization::Symlink,
+        }
     }
 }
 
@@ -61,8 +63,8 @@ impl Config {
         }
         let text = std::fs::read_to_string(&path)
             .with_context(|| format!("reading {}", path.display()))?;
-        let raw: RawFile = toml::from_str(&text)
-            .with_context(|| format!("parsing {}", path.display()))?;
+        let raw: RawFile =
+            toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))?;
 
         let mut cfg = Config::default();
         if let Some(m) = raw.wvm.and_then(|w| w.materialization) {

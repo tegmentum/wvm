@@ -36,8 +36,7 @@ pub fn put(layout: &Layout, digest: &str, data: &[u8], mode: u32) -> Result<Path
     // from it is collision-free for distinct objects. (Avoids `process::id`,
     // which is unsupported under wasm.)
     let tmp = parent.join(format!(".tmp-{digest}"));
-    std::fs::write(&tmp, data)
-        .with_context(|| format!("writing store temp {}", tmp.display()))?;
+    std::fs::write(&tmp, data).with_context(|| format!("writing store temp {}", tmp.display()))?;
 
     #[cfg(unix)]
     std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(mode))

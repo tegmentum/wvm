@@ -146,9 +146,7 @@ pub fn walk_files(dir: &std::path::Path) -> Result<Vec<std::path::PathBuf>> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
     while let Some(d) = stack.pop() {
-        for entry in std::fs::read_dir(&d)
-            .with_context(|| format!("reading {}", d.display()))?
-        {
+        for entry in std::fs::read_dir(&d).with_context(|| format!("reading {}", d.display()))? {
             let entry = entry?;
             if entry.file_type()?.is_dir() {
                 stack.push(entry.path());

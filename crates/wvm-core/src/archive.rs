@@ -43,9 +43,15 @@ pub fn extract_tar_xz(archive: &Path) -> Result<Vec<ExtractedFile>> {
 
         let mode = entry.header().mode().unwrap_or(0o644);
         let mut data = Vec::new();
-        entry.read_to_end(&mut data).context("reading tar entry data")?;
+        entry
+            .read_to_end(&mut data)
+            .context("reading tar entry data")?;
 
-        out.push(ExtractedFile { logical_path: logical, mode, data });
+        out.push(ExtractedFile {
+            logical_path: logical,
+            mode,
+            data,
+        });
     }
 
     if out.is_empty() {

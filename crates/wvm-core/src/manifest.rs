@@ -49,6 +49,5 @@ pub fn mode_string(mode: u32) -> String {
 /// Parse a `0755`-style octal mode string.
 pub fn parse_mode(s: &str) -> Result<u32> {
     let trimmed = s.trim_start_matches("0o");
-    u32::from_str_radix(trimmed, 8)
-        .with_context(|| format!("invalid mode string: {s}"))
+    u32::from_str_radix(trimmed, 8).with_context(|| format!("invalid mode string: {s}"))
 }

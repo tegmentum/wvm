@@ -40,7 +40,9 @@ impl WasiHttp {
             if !(200..300).contains(&status) {
                 bail!("unexpected HTTP {status} for {current}");
             }
-            return resp.body().map_err(|e| anyhow!("reading body of {current}: {e}"));
+            return resp
+                .body()
+                .map_err(|e| anyhow!("reading body of {current}: {e}"));
         }
         bail!("too many redirects starting from {url}")
     }
@@ -94,8 +96,7 @@ impl WasiHttp {
                 wvm_core::human_bytes(buf.len() as u64)
             ));
 
-            std::fs::write(dest, &buf)
-                .map_err(|e| anyhow!("writing {}: {e}", dest.display()))?;
+            std::fs::write(dest, &buf).map_err(|e| anyhow!("writing {}: {e}", dest.display()))?;
             return Ok(buf.len() as u64);
         }
         bail!("too many redirects starting from {url}")
@@ -110,8 +111,7 @@ impl Http for WasiHttp {
 
     fn download(&self, url: &str, dest: &Path) -> Result<u64> {
         let bytes = self.get_bytes(url)?;
-        std::fs::write(dest, &bytes)
-            .map_err(|e| anyhow!("writing {}: {e}", dest.display()))?;
+        std::fs::write(dest, &bytes).map_err(|e| anyhow!("writing {}: {e}", dest.display()))?;
         Ok(bytes.len() as u64)
     }
 }
@@ -123,7 +123,10 @@ fn resolve_url(base: &str, location: &str) -> String {
     }
     if let Some(scheme_end) = base.find("://") {
         let after = &base[scheme_end + 3..];
-        let origin_len = after.find('/').map(|i| scheme_end + 3 + i).unwrap_or(base.len());
+        let origin_len = after
+            .find('/')
+            .map(|i| scheme_end + 3 + i)
+            .unwrap_or(base.len());
         let origin = &base[..origin_len];
         if location.starts_with('/') {
             return format!("{origin}{location}");

@@ -1,0 +1,55 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            label: aarch64-macos
+          - os: macos-13
+            label: x86_64-macos
+          - os: ubuntu-latest
+            label: x86_64-linux
+          - os: ubuntu-24.04-arm
+            label: aarch64-linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (with wasm32-wasip2)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+
+      - name: Install wac (component composer)
+        run: cargo install wac-cli --locked
+
+      - name: Build
+        run: make
+
+      - name: Package wvm-${{ matrix.label }}
+        run: |
+          bin="wvm-${{ matrix.label }}"
+          cp target/release/wvm "$bin"
+          if command -v sha256sum >/dev/null 2>&1; then
+            sha256sum "$bin" > "$bin.sha256"
+          else
+            shasum -a 256 "$bin" > "$bin.sha256"
+          fi
+
+      - name: Upload to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            wvm-${{ matrix.label }}
+            wvm-${{ matrix.label }}.sha256

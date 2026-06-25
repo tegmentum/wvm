@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust (with wasm32-wasip2)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-wasip2
+          components: rustfmt, clippy
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install wac (component composer)
+        run: cargo install wac-cli --locked
+
+      - name: Format check
+        run: cargo fmt --all --check
+
+      - name: Build (app -> compose -> native)
+        run: make
+
+      - name: Clippy (native crates)
+        run: cargo clippy -p wvm-core -p wvm --release -- -D warnings
+
+      - name: Clippy (wasm app)
+        run: cargo clippy -p wvm-app --target wasm32-wasip2 --release -- -D warnings
+
+      - name: Test
+        run: cargo test

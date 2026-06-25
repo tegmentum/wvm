@@ -22,11 +22,8 @@ pub fn materialize(
     mode: u32,
 ) -> Result<()> {
     let link_path = version_dir.join(logical_path);
-    let parent = link_path
-        .parent()
-        .context("logical path has no parent")?;
-    std::fs::create_dir_all(parent)
-        .with_context(|| format!("creating {}", parent.display()))?;
+    let parent = link_path.parent().context("logical path has no parent")?;
+    std::fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
 
     match strategy {
         Materialization::Symlink => {
@@ -37,7 +34,11 @@ pub fn materialize(
         }
         Materialization::Copy => {
             std::fs::copy(object_abs, &link_path).with_context(|| {
-                format!("copying {} -> {}", object_abs.display(), link_path.display())
+                format!(
+                    "copying {} -> {}",
+                    object_abs.display(),
+                    link_path.display()
+                )
             })?;
             #[cfg(unix)]
             std::fs::set_permissions(&link_path, std::fs::Permissions::from_mode(mode))

@@ -28,10 +28,14 @@ impl Layout {
     pub fn discover() -> Result<Layout> {
         if let Some(v) = std::env::var_os("WVM_HOME") {
             if !v.is_empty() {
-                return Ok(Layout { root: PathBuf::from(v) });
+                return Ok(Layout {
+                    root: PathBuf::from(v),
+                });
             }
         }
-        Ok(Layout { root: default_root()? })
+        Ok(Layout {
+            root: default_root()?,
+        })
     }
 
     pub fn store_dir(&self) -> PathBuf {
@@ -107,9 +111,12 @@ impl Layout {
 
     /// Ensure the base directory skeleton exists.
     pub fn ensure_base(&self) -> Result<()> {
-        for dir in [self.store_dir(), self.downloads_dir(), self.versions_dir(WASMTIME)] {
-            std::fs::create_dir_all(&dir)
-                .with_context(|| format!("creating {}", dir.display()))?;
+        for dir in [
+            self.store_dir(),
+            self.downloads_dir(),
+            self.versions_dir(WASMTIME),
+        ] {
+            std::fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
         }
         Ok(())
     }
@@ -118,8 +125,7 @@ impl Layout {
 /// Default WVM root when `WVM_HOME` is unset.
 #[cfg(not(target_arch = "wasm32"))]
 fn default_root() -> Result<PathBuf> {
-    let home =
-        dirs::home_dir().context("could not determine home directory; set WVM_HOME")?;
+    let home = dirs::home_dir().context("could not determine home directory; set WVM_HOME")?;
     Ok(home.join(".tegmentum").join("wvm"))
 }
 

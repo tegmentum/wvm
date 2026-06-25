@@ -175,10 +175,7 @@ impl Index for ComponentIndex {
     }
 
     fn stats(&self) -> Result<Stats> {
-        let rows = self.query(
-            "SELECT COUNT(*), COALESCE(SUM(size), 0) FROM objects",
-            &[],
-        )?;
+        let rows = self.query("SELECT COUNT(*), COALESCE(SUM(size), 0) FROM objects", &[])?;
         let first = rows.rows.first();
         let objects = first
             .and_then(|r| r.columns.first())
@@ -195,7 +192,11 @@ impl Index for ComponentIndex {
             .and_then(|r| r.columns.first())
             .and_then(as_int)
             .unwrap_or(0);
-        Ok(Stats { objects, referenced, total_size })
+        Ok(Stats {
+            objects,
+            referenced,
+            total_size,
+        })
     }
 
     fn register_app(
@@ -212,7 +213,12 @@ impl Index for ComponentIndex {
             self.exec("DELETE FROM apps WHERE name=?", &[text(name)])?;
             self.exec(
                 "INSERT INTO apps(name, path, runtime_path, registered_at) VALUES(?, ?, ?, ?)",
-                &[text(name), opt_text(path), opt_text(runtime_path), int(registered_at)],
+                &[
+                    text(name),
+                    opt_text(path),
+                    opt_text(runtime_path),
+                    int(registered_at),
+                ],
             )?;
             for v in runtimes {
                 self.exec(
@@ -258,7 +264,12 @@ impl Index for ComponentIndex {
                 .iter()
                 .filter_map(|v| v.columns.first().and_then(as_text))
                 .collect();
-            apps.push(AppRecord { name, path, runtime_path, runtimes });
+            apps.push(AppRecord {
+                name,
+                path,
+                runtime_path,
+                runtimes,
+            });
         }
         Ok(apps)
     }
@@ -320,5 +331,10 @@ fn digest_size_rows(result: &sql::QueryResult) -> Vec<(String, i64)> {
 }
 
 fn dberr(e: sql::DatabaseError) -> anyhow::Error {
-    anyhow!("sqlite error {} ({}): {}", e.code, e.extended_code, e.message)
+    anyhow!(
+        "sqlite error {} ({}): {}",
+        e.code,
+        e.extended_code,
+        e.message
+    )
 }

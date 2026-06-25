@@ -57,7 +57,13 @@ impl Bar {
             };
             eprintln!("{label}{suffix} …");
         }
-        Bar { label, total, tty, frame: 0, last_pct: -1 }
+        Bar {
+            label,
+            total,
+            tty,
+            frame: 0,
+            last_pct: -1,
+        }
     }
 
     /// Update with the number of bytes received so far.
@@ -65,11 +71,11 @@ impl Bar {
         if !self.tty {
             return;
         }
-        let pct = if self.total > 0 {
-            ((current * 100) / self.total) as i32
-        } else {
-            -1
-        };
+        // Percent, or -1 when the total is unknown.
+        let pct = (current * 100)
+            .checked_div(self.total)
+            .map(|p| p as i32)
+            .unwrap_or(-1);
         // Redraw on each percent step (or every call when total is unknown).
         if pct == self.last_pct {
             return;
@@ -78,8 +84,10 @@ impl Bar {
         self.frame = (self.frame + 1) % FRAMES.len();
         let spin = FRAMES[self.frame];
 
-        if self.total > 0 {
-            let filled = (current as usize * BAR_WIDTH / self.total as usize).min(BAR_WIDTH);
+        if let Some(filled) = (current as usize * BAR_WIDTH)
+            .checked_div(self.total as usize)
+            .map(|f| f.min(BAR_WIDTH))
+        {
             let bar: String = "█".repeat(filled) + &"░".repeat(BAR_WIDTH - filled);
             redraw(&format!(
                 "{spin} {} [{bar}] {pct:>3}%  {} / {}",
@@ -119,7 +127,11 @@ impl Spinner {
         } else {
             eprintln!("{label} …");
         }
-        Spinner { label, tty, frame: 0 }
+        Spinner {
+            label,
+            tty,
+            frame: 0,
+        }
     }
 
     /// Advance the spinner, optionally updating the trailing detail.

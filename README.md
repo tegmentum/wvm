@@ -201,6 +201,24 @@ and the Homebrew formula both consume those `wvm-<arch>-<os>` assets.
 12 releases (major divisible by 12 — 24, 36, 48, …), supported 24 months; wvm
 marks these in `wvm list` and resolves `wvm install lts` to the newest one.
 
+## Continuous integration
+
+CI runs on GitHub Actions (`.github/workflows/ci.yml`): format check, the full
+`make` build, clippy (`-D warnings`), and tests. Tagging `v*` triggers
+`release.yml`, which builds the `wvm-<arch>-<os>` binaries + checksums for each
+platform and attaches them to the release.
+
+Run the same checks locally:
+
+```sh
+make ci      # fmt + build + clippy + test, no Docker
+make act     # run the CI workflow in Docker via nektos/act (uses .actrc)
+```
+
+`make act` needs a running Docker daemon (e.g. [Colima](https://github.com/abiosoft/colima):
+`colima start`). On Apple Silicon, `.actrc` pins `linux/amd64` to match
+GitHub-hosted runners.
+
 ## License
 
 Apache-2.0.

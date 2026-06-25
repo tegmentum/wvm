@@ -43,7 +43,12 @@ pub fn ensure(layout: &Layout) -> Result<String> {
         .assets
         .iter()
         .find(|a| a.name == asset_name)
-        .ok_or_else(|| anyhow!("no Wasmtime asset {asset_name} for host {}", platform.label()))?;
+        .ok_or_else(|| {
+            anyhow!(
+                "no Wasmtime asset {asset_name} for host {}",
+                platform.label()
+            )
+        })?;
 
     eprintln!("wvm: bootstrapping seed runtime (Wasmtime {version}) …");
     let downloads = layout.downloads_dir();

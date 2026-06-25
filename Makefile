@@ -7,7 +7,7 @@ APP_WASM      := target/wasm32-wasip2/release/wvm_app.wasm
 COMPOSED      := target/wvm-app.composed.wasm
 SQLITE        := vendor/sqlite-core.wasm
 
-.PHONY: all app compose native clean
+.PHONY: all app compose native clean ci act
 
 all: native
 
@@ -22,3 +22,14 @@ native: compose
 
 clean:
 	cargo clean
+
+# Run the same checks CI runs, locally and without Docker.
+ci: all
+	cargo fmt --all --check
+	cargo clippy -p wvm-core -p wvm --release -- -D warnings
+	cargo clippy -p wvm-app --target wasm32-wasip2 --release -- -D warnings
+	cargo test
+
+# Run the CI workflow in Docker via nektos/act (uses .actrc).
+act:
+	act -W .github/workflows/ci.yml

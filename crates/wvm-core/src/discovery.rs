@@ -65,8 +65,7 @@ pub fn set_default_version(layout: &Layout, version: &str) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&path, version)
-        .with_context(|| format!("writing {}", path.display()))?;
+    std::fs::write(&path, version).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
 
@@ -88,7 +87,10 @@ pub fn effective_version(layout: &Layout) -> Option<(String, &'static str)> {
 }
 
 fn binary_in_version(layout: &Layout, version: &str) -> PathBuf {
-    layout.version_dir(WASMTIME, version).join("bin").join("wasmtime")
+    layout
+        .version_dir(WASMTIME, version)
+        .join("bin")
+        .join("wasmtime")
 }
 
 /// Resolve a wasmtime binary following the discovery order:
@@ -119,7 +121,10 @@ pub fn resolve(layout: &Layout, cwd: &Path) -> Result<Resolved> {
     {
         let bin = binary_in_version(layout, &version);
         if bin.exists() {
-            return Ok(Resolved { binary: bin, source: format!("{src} ({version})") });
+            return Ok(Resolved {
+                binary: bin,
+                source: format!("{src} ({version})"),
+            });
         }
     }
 
@@ -132,7 +137,10 @@ pub fn resolve(layout: &Layout, cwd: &Path) -> Result<Resolved> {
             let p = PathBuf::from(val);
             for candidate in [p.join("bin").join("wasmtime"), p.clone()] {
                 if candidate.is_file() {
-                    return Ok(Resolved { binary: candidate, source: format!("${var}") });
+                    return Ok(Resolved {
+                        binary: candidate,
+                        source: format!("${var}"),
+                    });
                 }
             }
         }
@@ -140,7 +148,10 @@ pub fn resolve(layout: &Layout, cwd: &Path) -> Result<Resolved> {
 
     // 5. System runtime / PATH lookup
     if let Some(bin) = which("wasmtime") {
-        return Ok(Resolved { binary: bin, source: "PATH".to_string() });
+        return Ok(Resolved {
+            binary: bin,
+            source: "PATH".to_string(),
+        });
     }
 
     bail!("no wasmtime runtime found; try `wvm install latest` then `wvm default latest`")

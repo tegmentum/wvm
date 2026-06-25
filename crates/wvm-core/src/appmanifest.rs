@@ -66,6 +66,10 @@ impl AppManifest {
             bail!("[app] must list `runtimes` or set `runtime-path`");
         }
         let runtimes = app.runtimes.iter().map(|v| normalize_version(v)).collect();
-        Ok(AppManifest { name: app.name, runtimes, runtime_path: app.runtime_path })
+        Ok(AppManifest {
+            name: app.name,
+            runtimes,
+            runtime_path: app.runtime_path,
+        })
     }
 }

@@ -1,0 +1,15 @@
+# Defaults for running CI locally with nektos/act (https://github.com/nektos/act).
+#
+#   make act        # run the CI build job in Docker
+#   act -j build    # equivalently
+#
+# Use a fuller runner image so rustup/cargo/make are available.
+-P ubuntu-latest=catthehacker/ubuntu:act-latest
+
+# GitHub-hosted runners are amd64; emulate it so local runs match CI
+# (important on Apple Silicon).
+--container-architecture linux/amd64
+
+# Don't bind-mount the host Docker socket into job containers — the workflow
+# needs no docker-in-docker, and the mount fails on Colima's VM-backed socket.
+--container-daemon-socket -
