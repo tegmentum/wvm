@@ -44,13 +44,20 @@ fn now_epoch() -> i64 {
 }
 
 fn resolve_release(http: &WasiHttp, version_arg: &str) -> Result<Release> {
-    let url = if version_arg == "latest" {
-        format!("https://api.github.com/repos/{REPO}/releases/latest")
-    } else {
-        format!(
+    let url = match version_arg {
+        "latest" => format!("https://api.github.com/repos/{REPO}/releases/latest"),
+        "lts" => {
+            // Newest LTS available for this host.
+            let lts = fetch_release_versions(false)?
+                .into_iter()
+                .find(|v| wvm_core::is_lts(v))
+                .context("no LTS release found for this platform")?;
+            format!("https://api.github.com/repos/{REPO}/releases/tags/v{lts}")
+        }
+        v => format!(
             "https://api.github.com/repos/{REPO}/releases/tags/v{}",
-            normalize_version(version_arg)
-        )
+            normalize_version(v)
+        ),
     };
     let body = http
         .get_string(&url)
@@ -82,7 +89,10 @@ pub fn fetch_release_versions(all: bool) -> Result<Vec<String>> {
             continue;
         }
         let version = normalize_version(&r.tag_name);
-        let has_build = r.assets.iter().any(|a| a.name == platform.asset_name(&version));
+        let has_build = r
+            .assets
+            .iter()
+            .any(|a| a.name == platform.asset_name(&version));
         if !has_build && !all {
             continue;
         }
@@ -130,7 +140,11 @@ pub fn install(version_arg: &str, make_default: bool) -> Result<()> {
     )?;
 
     let archive_sha256 = hash::sha256_file(&download_path)?;
-    match asset.digest.as_deref().and_then(|d| d.strip_prefix("sha256:")) {
+    match asset
+        .digest
+        .as_deref()
+        .and_then(|d| d.strip_prefix("sha256:"))
+    {
         Some(expected) if expected.to_lowercase() != archive_sha256 => {
             let _ = std::fs::remove_file(&download_path);
             bail!("checksum mismatch for {asset_name}: expected {expected}, got {archive_sha256}");
@@ -162,7 +176,13 @@ pub fn install(version_arg: &str, make_default: bool) -> Result<()> {
         }
         let object = store::put(&layout, &digest, &f.data, f.mode)?;
         // `copy` materialization: symlinks are unavailable under wasm.
-        materialize::materialize(Materialization::Copy, &staging, &f.logical_path, &object, f.mode)?;
+        materialize::materialize(
+            Materialization::Copy,
+            &staging,
+            &f.logical_path,
+            &object,
+            f.mode,
+        )?;
         entries.push(FileEntry {
             path: f.logical_path.clone(),
             sha256: digest,

@@ -6,8 +6,8 @@
 # Establishes the native `wvm` binary. Once installed:
 #
 #   wvm install latest
-#   wvm use latest
-#   wasmtime --version
+#   wvm default latest
+#   wvm exec -- --version
 #
 # `wvm` is a thin native bootstrapper: it downloads and locks a protected seed
 # Wasmtime runtime on first use, then runs the WVM application as a WebAssembly
@@ -38,13 +38,31 @@ detect_target() {
     printf '%s-%s' "$arch" "$os"
 }
 
+verify_checksum() {
+    file="$1"
+    sumurl="$2"
+    expected="$(curl -fsSL "$sumurl" 2>/dev/null | awk '{print $1}')" || return 0
+    [ -n "$expected" ] || return 0
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual="$(sha256sum "$file" | awk '{print $1}')"
+    elif command -v shasum >/dev/null 2>&1; then
+        actual="$(shasum -a 256 "$file" | awk '{print $1}')"
+    else
+        say "  (no sha256 tool found; skipping checksum verification)"
+        return 0
+    fi
+    [ "$expected" = "$actual" ] || err "checksum mismatch for $file"
+    say "  verified checksum"
+}
+
 install_from_release() {
     target="$1"
     asset="wvm-$target"
-    url="https://github.com/$REPO/releases/latest/download/$asset"
+    base="https://github.com/$REPO/releases/latest/download"
     say "Fetching $asset ..."
     mkdir -p "$BIN_DIR"
-    if curl -fsSL "$url" -o "$BIN_DIR/wvm" 2>/dev/null; then
+    if curl -fsSL "$base/$asset" -o "$BIN_DIR/wvm" 2>/dev/null; then
+        verify_checksum "$BIN_DIR/wvm" "$base/$asset.sha256"
         chmod +x "$BIN_DIR/wvm"
         return 0
     fi
@@ -94,7 +112,7 @@ main() {
     say ""
     say "Next:"
     say "    wvm install latest    # installs a runtime for your projects"
-    say "    wvm use latest"
+    say "    wvm default latest    # (or: wvm install lts)"
     say "    wvm exec -- --version"
 }
 

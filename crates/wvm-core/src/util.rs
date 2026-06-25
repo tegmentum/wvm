@@ -18,6 +18,20 @@ pub fn normalize_version(v: &str) -> String {
     v.strip_prefix('v').unwrap_or(v).to_string()
 }
 
+/// Whether a version is a Wasmtime LTS release.
+///
+/// Wasmtime cuts an LTS every 12 releases; the major version is divisible by 12
+/// (12, 24, 36, 48, …) and is supported for 24 months. See
+/// <https://docs.wasmtime.dev/stability-release.html>.
+pub fn is_lts(version: &str) -> bool {
+    let major: u64 = version
+        .split(|c: char| !c.is_ascii_digit())
+        .find(|p| !p.is_empty())
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(0);
+    major >= 12 && major.is_multiple_of(12)
+}
+
 /// Human-readable byte size, e.g. `54.4 MiB`.
 pub fn human_bytes(n: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];

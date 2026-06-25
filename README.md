@@ -16,6 +16,13 @@ design.
 curl -fsSL https://raw.githubusercontent.com/tegmentum/wvm/main/install.sh | sh
 ```
 
+Or with Homebrew:
+
+```sh
+brew tap tegmentum/wvm https://github.com/tegmentum/wvm
+brew install wvm
+```
+
 On first run, `wvm` downloads and locks a protected seed Wasmtime runtime and
 runs as a WebAssembly component on it.
 
@@ -51,8 +58,8 @@ reverts it to the default.
 
 | Command | Description |
 | --- | --- |
-| `wvm install <version>` | Install a runtime (`latest` for the newest). `--default` to set it as default. |
-| `wvm list [--all]` | List all available versions (most recent first); installed/default/seed marked. `--all` includes prereleases. |
+| `wvm install <version>` | Install a runtime (`latest` for newest, `lts` for the newest LTS). `--default` to set it as default. |
+| `wvm list [--all]` | List all available versions; `lts`/installed/default/seed marked. `--all` includes prereleases. |
 | `wvm uninstall <version>` | Remove an installed runtime (`--force` past app deps; the seed cannot be removed). |
 | `wvm register <app-dir>` | Record an app's runtime dependency from its `wvm.toml` `[app]`. |
 | `wvm unregister <name>` | Drop an application's registration. |
@@ -181,6 +188,18 @@ The vendored SQLite component (`vendor/sqlite-core.wasm`) provides
 [`sqlite-wasm`](https://github.com/tegmentum/sqlite-wasm). The WASI WIT for the
 app's `wasi:cli` command world is vendored under `crates/wvm-app/wit/deps`
 (fetched with `wkg wit fetch`), so a normal build needs no network for WIT.
+
+## Releasing
+
+For each platform, `make` produces `target/release/wvm`; publish it on the
+GitHub release as `wvm-<arch>-<os>` (e.g. `wvm-aarch64-macos`) alongside a
+matching `wvm-<arch>-<os>.sha256`. Then bump `version` and the per-platform
+`sha256` values in [`Formula/wvm.rb`](Formula/wvm.rb). The `install.sh` script
+and the Homebrew formula both consume those `wvm-<arch>-<os>` assets.
+
+[Wasmtime cuts an LTS](https://docs.wasmtime.dev/stability-release.html) every
+12 releases (major divisible by 12 — 24, 36, 48, …), supported 24 months; wvm
+marks these in `wvm list` and resolves `wvm install lts` to the newest one.
 
 ## License
 

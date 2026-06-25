@@ -20,4 +20,4 @@ pub mod platform;
 pub mod store;
 pub mod util;
 
-pub use util::{human_bytes, normalize_version, version_cmp};
+pub use util::{human_bytes, is_lts, normalize_version, version_cmp};

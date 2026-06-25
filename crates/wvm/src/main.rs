@@ -25,6 +25,15 @@ fn main() {
 fn run() -> Result<()> {
     let mut args: Vec<String> = std::env::args().skip(1).collect();
 
+    // Print the wvm version without bootstrapping a runtime.
+    if matches!(
+        args.first().map(String::as_str),
+        Some("--version") | Some("-V")
+    ) {
+        println!("wvm {}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
+
     let layout = Layout::discover()?;
     std::fs::create_dir_all(&layout.root)
         .with_context(|| format!("creating {}", layout.root.display()))?;
@@ -69,7 +78,11 @@ fn exec_runtime(layout: &Layout, raw: &[String]) -> Result<()> {
     let cwd = std::env::current_dir().context("getting current directory")?;
     let resolved = wvm_core::discovery::resolve(layout, &cwd)?;
     if std::env::var_os("WVM_VERBOSE").is_some() {
-        eprintln!("wvm: using wasmtime from {} [{}]", resolved.binary.display(), resolved.source);
+        eprintln!(
+            "wvm: using wasmtime from {} [{}]",
+            resolved.binary.display(),
+            resolved.source
+        );
     }
 
     // Materialized runtime files are copies (symlink-free under wasm) and may
@@ -106,8 +119,7 @@ fn materialize_app(layout: &Layout) -> Result<()> {
         Err(_) => true,
     };
     if needs_write {
-        std::fs::write(&dest, APP_WASM)
-            .with_context(|| format!("writing {}", dest.display()))?;
+        std::fs::write(&dest, APP_WASM).with_context(|| format!("writing {}", dest.display()))?;
     }
     Ok(())
 }
@@ -117,7 +129,10 @@ fn materialize_app(layout: &Layout) -> Result<()> {
 fn launch_app(layout: &Layout, args: &[String], extra_dir: Option<&Path>) -> Result<()> {
     let seed_bin = layout.seed_bin();
     let app_wasm = layout.app_wasm();
-    let home = layout.root.to_str().context("WVM_HOME is not valid UTF-8")?;
+    let home = layout
+        .root
+        .to_str()
+        .context("WVM_HOME is not valid UTF-8")?;
 
     let mut cmd = Command::new(&seed_bin);
     cmd.arg("run")
@@ -140,7 +155,8 @@ fn launch_app(layout: &Layout, args: &[String], extra_dir: Option<&Path>) -> Res
     // Forward the per-session override so the app reflects it in
     // list/current and resolution.
     if let Ok(v) = std::env::var(wvm_core::discovery::SESSION_VAR) {
-        cmd.arg("--env").arg(format!("{}={v}", wvm_core::discovery::SESSION_VAR));
+        cmd.arg("--env")
+            .arg(format!("{}={v}", wvm_core::discovery::SESSION_VAR));
     }
     // Everything after the module path is passed to the guest as argv[1..].
     cmd.arg(&app_wasm);

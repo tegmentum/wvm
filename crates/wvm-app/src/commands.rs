@@ -67,11 +67,14 @@ pub fn list(all: bool) -> Result<()> {
         return Ok(());
     }
 
-    println!("Wasmtime runtimes  (* current; tags: installed, default, seed)");
+    println!("Wasmtime runtimes  (* current; tags: lts, installed, default, seed)");
     for v in &versions {
         let is_current = effective.as_ref().map(|(e, _)| e == v).unwrap_or(false);
         let marker = if is_current { "*" } else { " " };
         let mut tags: Vec<&str> = Vec::new();
+        if wvm_core::is_lts(v) {
+            tags.push("lts");
+        }
         if seed.as_deref() == Some(v.as_str()) {
             tags.push("seed");
         }
@@ -117,7 +120,9 @@ pub fn path(version: Option<&str>) -> Result<()> {
         Some(v) => normalize_version(v),
         None => discovery::effective_version(&layout)
             .map(|(v, _)| v)
-            .ok_or_else(|| anyhow!("no default runtime; pass a version or run `wvm default <version>`"))?,
+            .ok_or_else(|| {
+                anyhow!("no default runtime; pass a version or run `wvm default <version>`")
+            })?,
     };
     let dir = layout.version_dir(WASMTIME, &version);
     if !dir.exists() {
@@ -154,7 +159,9 @@ pub fn use_version(version_arg: &str) -> Result<()> {
 
     if crate::progress::stdout_is_terminal() {
         eprintln!("wasmtime {version} is installed.");
-        eprintln!("`wvm use` switches the runtime for the current shell, which needs the shell hook:");
+        eprintln!(
+            "`wvm use` switches the runtime for the current shell, which needs the shell hook:"
+        );
         eprintln!("    wvm shell-init >> ~/.zshrc   # once, then restart your shell");
         eprintln!("Then `wvm use {version}` applies to this shell. For the persistent default: `wvm default {version}`.");
     } else {
@@ -230,8 +237,7 @@ pub fn uninstall(version_arg: &str, force: bool) -> Result<()> {
         );
     }
 
-    std::fs::remove_dir_all(&dir)
-        .with_context(|| format!("removing {}", dir.display()))?;
+    std::fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))?;
 
     if let Ok(mut index) = open_index(&layout) {
         let _ = index.remove_version(WASMTIME, &version);
@@ -318,8 +324,7 @@ pub fn gc(prune: bool) -> Result<()> {
         for (digest, _) in &unreferenced {
             let p = layout.object_path(digest);
             if p.exists() {
-                std::fs::remove_file(&p)
-                    .with_context(|| format!("removing {}", p.display()))?;
+                std::fs::remove_file(&p).with_context(|| format!("removing {}", p.display()))?;
             }
             index.delete_object(digest)?;
         }
@@ -365,7 +370,11 @@ pub fn objects() -> Result<()> {
                 .collect::<Vec<_>>()
                 .join(", ")
         };
-        println!("  {}  {:>10}  {who}", &digest[..12], human_bytes(size.max(0) as u64));
+        println!(
+            "  {}  {:>10}  {who}",
+            &digest[..12],
+            human_bytes(size.max(0) as u64)
+        );
     }
     Ok(())
 }
@@ -394,7 +403,11 @@ pub fn register(app_dir: &str) -> Result<()> {
     }
     if !manifest.runtimes.is_empty() {
         for v in &manifest.runtimes {
-            let note = if is_installed(&layout, v) { "" } else { "  (not installed)" };
+            let note = if is_installed(&layout, v) {
+                ""
+            } else {
+                "  (not installed)"
+            };
             println!("  runtime: {v}{note}");
         }
     }
@@ -444,7 +457,11 @@ pub fn apps() -> Result<()> {
         if let Some(p) = &app.runtime_path {
             parts.push(format!("custom runtime: {p}"));
         }
-        let detail = if parts.is_empty() { "(no runtimes)".to_string() } else { parts.join("; ") };
+        let detail = if parts.is_empty() {
+            "(no runtimes)".to_string()
+        } else {
+            parts.join("; ")
+        };
         println!("  {}  {detail}", app.name);
         if let Some(p) = &app.path {
             println!("      at {p}");
@@ -467,8 +484,8 @@ fn installed_versions(layout: &Layout) -> Result<Vec<String>> {
     let dir = layout.versions_dir(WASMTIME);
     let mut versions = Vec::new();
     if dir.exists() {
-        for entry in std::fs::read_dir(&dir)
-            .with_context(|| format!("reading {}", dir.display()))?
+        for entry in
+            std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))?
         {
             let entry = entry?;
             if !entry.file_type()?.is_dir() {
