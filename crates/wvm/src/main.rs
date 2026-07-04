@@ -76,6 +76,16 @@ fn exec_runtime(layout: &Layout, raw: &[String]) -> Result<()> {
     };
 
     let cwd = std::env::current_dir().context("getting current directory")?;
+
+    // Activation-time auto-install: a floating spec (e.g. `24`) pulls the newest
+    // matching version if one has appeared. Best-effort — network failures fall
+    // back to the best already-installed match.
+    if let Err(e) = ensure_active_runtime(layout, &cwd) {
+        if std::env::var_os("WVM_VERBOSE").is_some() {
+            eprintln!("wvm: auto-install check skipped: {e:#}");
+        }
+    }
+
     let resolved = wvm_core::discovery::resolve(layout, &cwd)?;
     if std::env::var_os("WVM_VERBOSE").is_some() {
         eprintln!(
@@ -92,6 +102,67 @@ fn exec_runtime(layout: &Layout, raw: &[String]) -> Result<()> {
     let mut cmd = Command::new(&resolved.binary);
     cmd.args(forwarded);
     exec_or_run(cmd, &resolved.binary)
+}
+
+/// Ensure the runtime the active spec selects is present, auto-installing the
+/// newest match for a floating spec. Delegates the actual install to the app
+/// (which owns `wasi:http`), but decides *whether* to bother using the cached
+/// release list so a plain `exec` stays offline and fast within the refresh
+/// interval.
+fn ensure_active_runtime(layout: &Layout, cwd: &Path) -> Result<()> {
+    use wvm_core::{cache, discovery, VersionSpec};
+
+    let Some((spec_str, _src)) = discovery::effective_spec_at(layout, cwd)? else {
+        return Ok(());
+    };
+    let spec = VersionSpec::parse(&spec_str).map_err(|e| anyhow::anyhow!(e))?;
+    let installed_best = discovery::resolve_installed(layout, &spec_str);
+
+    // Exact spec: install only if entirely absent.
+    if !spec.is_floating() {
+        if installed_best.is_some() {
+            return Ok(());
+        }
+        return delegate_ensure(layout, &spec_str);
+    }
+
+    // Floating spec. `WVM_REFRESH_INTERVAL=0` means stay offline at activation.
+    let ttl = cache::refresh_interval();
+    if ttl == 0 {
+        return Ok(());
+    }
+
+    // With a fresh cache we can tell locally whether a newer match exists and
+    // skip launching the app entirely when already up to date.
+    if let Some(c) = cache::read(layout, false) {
+        if c.is_fresh(now_epoch(), ttl) {
+            let remote_best = spec.resolve(&c.versions).map(str::to_string);
+            if remote_best.is_none() || remote_best == installed_best {
+                return Ok(());
+            }
+        }
+    }
+    delegate_ensure(layout, &spec_str)
+}
+
+/// Run the app's `ensure <spec>` step (materializing the app + seed first).
+fn delegate_ensure(layout: &Layout, spec_str: &str) -> Result<()> {
+    materialize_app(layout)?;
+    seed::ensure(layout)?;
+    let args = ["ensure".to_string(), spec_str.to_string()];
+    let status = run_app_and_wait(layout, &args)?;
+    if !status.success() && std::env::var_os("WVM_VERBOSE").is_some() {
+        eprintln!("wvm: auto-install step exited with {status}");
+    }
+    Ok(())
+}
+
+fn now_epoch() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0)
 }
 
 #[cfg(unix)]
@@ -124,9 +195,9 @@ fn materialize_app(layout: &Layout) -> Result<()> {
     Ok(())
 }
 
-/// Run the app component on the seed Wasmtime, forwarding `args`. `extra_dir`,
-/// when set, is preopened in addition to `WVM_HOME` (used by `register`).
-fn launch_app(layout: &Layout, args: &[String], extra_dir: Option<&Path>) -> Result<()> {
+/// Build the `wasmtime run … app.wasm <args>` command for the app component.
+/// `extra_dir`, when set, is preopened in addition to `WVM_HOME`.
+fn app_command(layout: &Layout, args: &[String], extra_dir: Option<&Path>) -> Result<Command> {
     let seed_bin = layout.seed_bin();
     let app_wasm = layout.app_wasm();
     let home = layout
@@ -137,7 +208,7 @@ fn launch_app(layout: &Layout, args: &[String], extra_dir: Option<&Path>) -> Res
     let mut cmd = Command::new(&seed_bin);
     cmd.arg("run")
         .arg("-S")
-        .arg("http") // enable wasi:http host support (used from M2)
+        .arg("http") // enable wasi:http host support
         .arg("--dir")
         .arg(format!("{home}::{home}"))
         .arg("--env")
@@ -152,6 +223,9 @@ fn launch_app(layout: &Layout, args: &[String], extra_dir: Option<&Path>) -> Res
     if let Ok(v) = std::env::var("WVM_VERBOSE") {
         cmd.arg("--env").arg(format!("WVM_VERBOSE={v}"));
     }
+    if let Ok(v) = std::env::var("WVM_REFRESH_INTERVAL") {
+        cmd.arg("--env").arg(format!("WVM_REFRESH_INTERVAL={v}"));
+    }
     // Forward the per-session override so the app reflects it in
     // list/current and resolution.
     if let Ok(v) = std::env::var(wvm_core::discovery::SESSION_VAR) {
@@ -161,8 +235,24 @@ fn launch_app(layout: &Layout, args: &[String], extra_dir: Option<&Path>) -> Res
     // Everything after the module path is passed to the guest as argv[1..].
     cmd.arg(&app_wasm);
     cmd.args(args);
+    Ok(cmd)
+}
 
-    exec_or_run(cmd, &seed_bin)
+/// Run the app component on the seed Wasmtime, forwarding `args`, replacing this
+/// process (`exec`) on success.
+fn launch_app(layout: &Layout, args: &[String], extra_dir: Option<&Path>) -> Result<()> {
+    let cmd = app_command(layout, args, extra_dir)?;
+    exec_or_run(cmd, &layout.seed_bin())
+}
+
+/// Run the app component and wait for it to finish (does not replace this
+/// process). The child's stdout is discarded so a following `exec` keeps a
+/// pristine stdout; progress and notices (on the child's stderr) pass through.
+fn run_app_and_wait(layout: &Layout, args: &[String]) -> Result<std::process::ExitStatus> {
+    let mut cmd = app_command(layout, args, None)?;
+    cmd.stdout(std::process::Stdio::null());
+    cmd.status()
+        .with_context(|| format!("running app {:?}", args.first()))
 }
 
 #[cfg(unix)]

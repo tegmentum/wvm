@@ -12,7 +12,7 @@ use wvm_core::appmanifest::AppManifest;
 use wvm_core::index::{reindex, Index};
 use wvm_core::layout::{Layout, WASMTIME};
 use wvm_core::manifest::Manifest;
-use wvm_core::{discovery, human_bytes, normalize_version, version_cmp};
+use wvm_core::{discovery, human_bytes, normalize_version, version_cmp, VersionSpec};
 
 fn now_epoch() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -38,7 +38,12 @@ pub fn list(all: bool) -> Result<()> {
     layout.ensure_base()?;
 
     let seed = seed_version(&layout);
-    let default = discovery::default_version(&layout);
+    let default_spec = discovery::default_version(&layout);
+    // The default is stored as a spec (e.g. `24`); tag the version it resolves
+    // to, not the raw spec string.
+    let default = default_spec
+        .as_deref()
+        .and_then(|s| discovery::resolve_installed(&layout, s));
     let effective = discovery::effective_version(&layout);
 
     let installed = installed_versions(&layout)?;
@@ -67,6 +72,17 @@ pub fn list(all: bool) -> Result<()> {
         return Ok(());
     }
 
+    if let Some(spec) = &default_spec {
+        if VersionSpec::parse(spec)
+            .map(|s| s.is_floating())
+            .unwrap_or(false)
+        {
+            match &default {
+                Some(v) => println!("Default: {spec} → {v}"),
+                None => println!("Default: {spec} (no matching version installed)"),
+            }
+        }
+    }
     println!("Wasmtime runtimes  (* current; tags: lts, installed, default, seed)");
     for v in &versions {
         let is_current = effective.as_ref().map(|(e, _)| e == v).unwrap_or(false);
@@ -99,13 +115,28 @@ pub fn list(all: bool) -> Result<()> {
 
 pub fn current() -> Result<()> {
     let layout = Layout::discover()?;
-    match discovery::effective_version(&layout) {
-        Some((v, source)) => {
-            println!("{v}");
-            if std::env::var_os("WVM_VERBOSE").is_some() {
-                eprintln!("(via {source})");
+    match discovery::effective_spec(&layout) {
+        Some((spec_str, source)) => match discovery::resolve_installed(&layout, &spec_str) {
+            Some(v) => {
+                // stdout stays just the concrete version (script-friendly).
+                println!("{v}");
+                let floating = VersionSpec::parse(&spec_str)
+                    .map(|s| s.is_floating())
+                    .unwrap_or(false);
+                if floating {
+                    eprintln!("(resolved from '{spec_str}')");
+                }
+                if std::env::var_os("WVM_VERBOSE").is_some() {
+                    eprintln!("(via {source})");
+                }
             }
-        }
+            None => {
+                eprintln!(
+                    "selected '{spec_str}' but no matching version is installed; run `wvm install {spec_str}`"
+                );
+                std::process::exit(1);
+            }
+        },
         None => {
             eprintln!("no default runtime set (use `wvm default <version>`)");
             std::process::exit(1);
@@ -117,7 +148,9 @@ pub fn current() -> Result<()> {
 pub fn path(version: Option<&str>) -> Result<()> {
     let layout = Layout::discover()?;
     let version = match version {
-        Some(v) => normalize_version(v),
+        // A spec argument resolves against the installed set.
+        Some(v) => discovery::resolve_installed(&layout, v)
+            .ok_or_else(|| anyhow!("no installed wasmtime matches '{v}'"))?,
         None => discovery::effective_version(&layout)
             .map(|(v, _)| v)
             .ok_or_else(|| {
@@ -132,15 +165,20 @@ pub fn path(version: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-/// `wvm default <version>` — set the persistent default (used by new shells).
-pub fn set_default(version_arg: &str) -> Result<()> {
+/// `wvm default <spec>` — set the persistent default (used by new shells). The
+/// spec may float (`latest`, `24`, `24.0`) or be exact (`24.0.1`); the newest
+/// matching version is installed now so the default is immediately usable, and
+/// the **spec** is stored so it keeps tracking its line.
+pub fn set_default(spec_arg: &str) -> Result<()> {
     let layout = Layout::discover()?;
-    let version = normalize_version(version_arg);
-    if !is_installed(&layout, &version) {
-        bail!("wasmtime {version} is not installed; run `wvm install {version}`");
+    let spec = VersionSpec::parse(spec_arg).map_err(|e| anyhow!(e))?;
+    let resolved = install::ensure(spec_arg)?;
+    discovery::set_default_version(&layout, &spec.to_string())?;
+    if spec.is_floating() {
+        println!("Default is now '{spec}' (currently wasmtime {resolved}, used by new shells)");
+    } else {
+        println!("Default is now wasmtime {resolved} (used by new shells)");
     }
-    discovery::set_default_version(&layout, &version)?;
-    println!("Default is now wasmtime {version} (used by new shells)");
     Ok(())
 }
 
@@ -150,23 +188,26 @@ pub fn set_default(version_arg: &str) -> Result<()> {
 /// shell hook (stdout captured) this prints `export WVM_VERSION=<v>` for the
 /// hook to `eval`; when run directly in a terminal it explains how to enable the
 /// hook.
-pub fn use_version(version_arg: &str) -> Result<()> {
-    let layout = Layout::discover()?;
-    let version = normalize_version(version_arg);
-    if !is_installed(&layout, &version) {
-        bail!("wasmtime {version} is not installed; run `wvm install {version}`");
-    }
+pub fn use_version(spec_arg: &str) -> Result<()> {
+    let spec = VersionSpec::parse(spec_arg).map_err(|e| anyhow!(e))?;
+    // Auto-install the newest match so the session var is immediately usable.
+    let resolved = install::ensure(spec_arg)?;
 
     if crate::progress::stdout_is_terminal() {
-        eprintln!("wasmtime {version} is installed.");
+        eprintln!("wasmtime {resolved} is installed.");
         eprintln!(
             "`wvm use` switches the runtime for the current shell, which needs the shell hook:"
         );
         eprintln!("    wvm shell-init >> ~/.zshrc   # once, then restart your shell");
-        eprintln!("Then `wvm use {version}` applies to this shell. For the persistent default: `wvm default {version}`.");
+        eprintln!("Then `wvm use {spec}` applies to this shell. For the persistent default: `wvm default {spec}`.");
     } else {
-        println!("export {}={version}", discovery::SESSION_VAR);
-        eprintln!("Now using wasmtime {version} (this shell)");
+        // Store the spec (not the resolved version) so the session floats too.
+        println!("export {}={spec}", discovery::SESSION_VAR);
+        if spec.is_floating() {
+            eprintln!("Now using '{spec}' (wasmtime {resolved}) for this shell");
+        } else {
+            eprintln!("Now using wasmtime {resolved} (this shell)");
+        }
     }
     Ok(())
 }

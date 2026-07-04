@@ -46,6 +46,22 @@ impl Layout {
         self.root.join("downloads")
     }
 
+    pub fn cache_dir(&self) -> PathBuf {
+        self.root.join("cache")
+    }
+
+    /// Cached remote release list (so activation-time auto-install need not hit
+    /// the network every invocation). Separate files for the stable vs `--all`
+    /// listings.
+    pub fn release_cache_file(&self, all: bool) -> PathBuf {
+        let name = if all {
+            "releases-all.json"
+        } else {
+            "releases.json"
+        };
+        self.cache_dir().join(name)
+    }
+
     pub fn config_file(&self) -> PathBuf {
         self.root.join("config.toml")
     }

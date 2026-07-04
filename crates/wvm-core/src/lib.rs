@@ -8,6 +8,7 @@
 
 pub mod appmanifest;
 pub mod archive;
+pub mod cache;
 pub mod config;
 pub mod discovery;
 pub mod hash;
@@ -17,7 +18,9 @@ pub mod layout;
 pub mod manifest;
 pub mod materialize;
 pub mod platform;
+pub mod spec;
 pub mod store;
 pub mod util;
 
+pub use spec::VersionSpec;
 pub use util::{human_bytes, is_lts, normalize_version, version_cmp};

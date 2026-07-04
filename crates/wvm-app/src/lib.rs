@@ -42,6 +42,13 @@ impl exports::wasi::cli::run::Guest for Component {
                 Some(v) => install::install(v, flag("--default") || flag("--use")),
                 None => missing_arg("install <version>"),
             },
+            // Internal: resolve a spec and auto-install the newest match if
+            // missing. Invoked by the bootstrapper before `exec` for floating
+            // specs. Prints nothing to stdout on success.
+            "ensure" => match positional {
+                Some(v) => install::ensure(v).map(|_| ()),
+                None => missing_arg("ensure <version>"),
+            },
             "list" => commands::list(flag("--all")),
             "current" => commands::current(),
             "path" => commands::path(positional),
@@ -102,14 +109,12 @@ fn print_help() {
     println!("wvm — WebAssembly Version Manager");
     println!();
     println!("Commands:");
-    println!(
-        "  install <version>    Install a runtime (`latest` for newest; --default to set default)"
-    );
+    println!("  install <spec>       Install a runtime (spec: latest, lts, 24, 24.0, or 24.0.1)");
     println!("  list [--all]         List all available versions (installed ones marked)");
     println!("  current              Show the effective runtime version (session or default)");
-    println!("  path [version]       Print a runtime's filesystem path");
-    println!("  default <version>    Set the persistent default (used by new shells)");
-    println!("  use <version>        Switch the runtime for the current shell (needs shell-init)");
+    println!("  path [spec]          Print a runtime's filesystem path");
+    println!("  default <spec>       Set the persistent default (floats: latest/lts/24/24.0)");
+    println!("  use <spec>           Switch the runtime for the current shell (needs shell-init)");
     println!("  deactivate           Clear the per-shell override (revert to default)");
     println!("  shell-init           Print the shell hook enabling per-shell `use`");
     println!("  uninstall <version>  Remove an installed runtime (--force past app deps)");

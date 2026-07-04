@@ -7,13 +7,17 @@ use crate::http_wasi::WasiHttp;
 use crate::progress::Spinner;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
+use std::cmp::Ordering;
 use wvm_core::config::Materialization;
 use wvm_core::http::Http;
 use wvm_core::index::Index;
 use wvm_core::layout::{Layout, WASMTIME};
 use wvm_core::manifest::{mode_string, FileEntry, Manifest};
 use wvm_core::platform::Platform;
-use wvm_core::{archive, discovery, hash, materialize, normalize_version, store};
+use wvm_core::{
+    archive, cache, discovery, hash, materialize, normalize_version, store, version_cmp,
+    VersionSpec,
+};
 
 const REPO: &str = "bytecodealliance/wasmtime";
 
@@ -44,25 +48,62 @@ fn now_epoch() -> i64 {
 }
 
 fn resolve_release(http: &WasiHttp, version_arg: &str) -> Result<Release> {
-    let url = match version_arg {
-        "latest" => format!("https://api.github.com/repos/{REPO}/releases/latest"),
-        "lts" => {
-            // Newest LTS available for this host.
-            let lts = fetch_release_versions(false)?
-                .into_iter()
-                .find(|v| wvm_core::is_lts(v))
-                .context("no LTS release found for this platform")?;
-            format!("https://api.github.com/repos/{REPO}/releases/tags/v{lts}")
+    let spec = VersionSpec::parse(version_arg).map_err(|e| anyhow!(e))?;
+    let url = match &spec {
+        // The `latest` endpoint reflects the true newest release directly.
+        VersionSpec::Latest => format!("https://api.github.com/repos/{REPO}/releases/latest"),
+        // Every other spec resolves against the available list, then we fetch
+        // that concrete tag.
+        _ => {
+            let available = fetch_release_versions(false)?;
+            let version = spec
+                .resolve(&available)
+                .ok_or_else(|| anyhow!("no available wasmtime version matches '{spec}'"))?;
+            format!("https://api.github.com/repos/{REPO}/releases/tags/v{version}")
         }
-        v => format!(
-            "https://api.github.com/repos/{REPO}/releases/tags/v{}",
-            normalize_version(v)
-        ),
     };
     let body = http
         .get_string(&url)
         .with_context(|| format!("fetching release metadata for {version_arg}"))?;
     serde_json::from_str(&body).context("parsing release JSON")
+}
+
+/// Ensure the newest version matching `spec_str` is installed, auto-installing
+/// it if absent, and return the concrete version. Floating specs may consult
+/// the network (bounded by the release cache); an exact spec installs that
+/// version if missing. Offline, it falls back to the best installed match.
+pub fn ensure(spec_str: &str) -> Result<String> {
+    let layout = Layout::discover()?;
+    let spec = VersionSpec::parse(spec_str).map_err(|e| anyhow!(e))?;
+
+    let installed = discovery::installed_versions(&layout)?;
+    let installed_best = spec.resolve(&installed).map(str::to_string);
+
+    // Best match available remotely (cached); ignore network failures.
+    let remote_best = match fetch_release_versions(false) {
+        Ok(list) => spec.resolve(&list).map(str::to_string),
+        Err(_) => None,
+    };
+
+    let target = match (remote_best, installed_best) {
+        (Some(r), Some(i)) => {
+            if version_cmp(&r, &i) == Ordering::Greater {
+                r
+            } else {
+                i
+            }
+        }
+        (Some(r), None) => r,
+        (None, Some(i)) => i,
+        (None, None) => bail!("no wasmtime version matches '{spec}' (and none is installed)"),
+    };
+
+    if !is_installed(&layout, &target) {
+        // The caller (default/use/exec) manages default+session itself, so
+        // suppress install's first-install-becomes-default side effect.
+        install_inner(&target, false, false)?;
+    }
+    Ok(target)
 }
 
 /// `wvm ls-remote [--all]` — list versions available from the Wasmtime GitHub
@@ -71,6 +112,18 @@ fn resolve_release(http: &WasiHttp, version_arg: &str) -> Result<Release> {
 /// build for this host are returned; `all` includes prereleases and versions
 /// without a host asset.
 pub fn fetch_release_versions(all: bool) -> Result<Vec<String>> {
+    let layout = Layout::discover()?;
+    let now = now_epoch();
+    let ttl = cache::refresh_interval();
+
+    // Serve from cache while fresh. `ttl == 0` means "stay offline": prefer any
+    // cached list regardless of age, fetching only when there is none at all.
+    if let Some(c) = cache::read(&layout, all) {
+        if ttl == 0 || c.is_fresh(now, ttl) {
+            return Ok(c.versions);
+        }
+    }
+
     let platform = Platform::detect()?;
     let http = WasiHttp;
 
@@ -98,10 +151,22 @@ pub fn fetch_release_versions(all: bool) -> Result<Vec<String>> {
         }
         out.push(version);
     }
+
+    // Best-effort: persist for the refresh interval so activation-time
+    // auto-install need not re-fetch on every invocation.
+    let _ = cache::write(&layout, all, &out, now);
     Ok(out)
 }
 
+/// `wvm install <spec>` — resolve and install a runtime. When `auto_default` is
+/// set and no default exists yet, the first install becomes the default (the
+/// convenience for a bare `wvm install`); callers that manage the default
+/// themselves pass `false`.
 pub fn install(version_arg: &str, make_default: bool) -> Result<()> {
+    install_inner(version_arg, make_default, true)
+}
+
+fn install_inner(version_arg: &str, make_default: bool, auto_default: bool) -> Result<()> {
     let layout = Layout::discover()?;
     layout.ensure_base()?;
     let platform = Platform::detect()?;
@@ -225,7 +290,7 @@ pub fn install(version_arg: &str, make_default: bool) -> Result<()> {
 
     // The first runtime installed becomes the default; otherwise honor
     // --default/--use.
-    if make_default || discovery::default_version(&layout).is_none() {
+    if make_default || (auto_default && discovery::default_version(&layout).is_none()) {
         discovery::set_default_version(&layout, &version)?;
         println!("Default is now wasmtime {version}");
     }

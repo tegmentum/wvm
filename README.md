@@ -54,18 +54,39 @@ wvm shell-init >> ~/.zshrc   # then restart your shell
 After that, `wvm use 44.0.0` applies to the current shell and `wvm deactivate`
 reverts it to the default.
 
+## Version specifiers
+
+`install`, `default`, `use`, `path`, and project pins all accept a **spec**
+rather than only an exact version. A spec can lock a line and float within it:
+
+| Spec | Locks to | Resolves to |
+| --- | --- | --- |
+| `latest` | newest overall | e.g. `46.0.1` |
+| `lts` | newest LTS line | e.g. `24.0.11` |
+| `24` (or `24.x`) | latest major line | newest `24.*` |
+| `24.0` (or `24.0.x`) | latest major/minor | newest `24.0.*` |
+| `24.0.1` | exact / frozen | exactly `24.0.1` |
+
+`default`/`use` store the **spec**, not the resolved version, so `wvm default 24`
+keeps tracking the newest `24.x` as patches land. Setting a floating default (or
+`use`) installs the newest match immediately. At activation (`wvm exec`, a new
+shell), a floating spec auto-installs a newer matching release if one has
+appeared; the remote release list is cached (`WVM_REFRESH_INTERVAL` seconds,
+default 3600) so this doesn't hit the network on every call, and
+`WVM_REFRESH_INTERVAL=0` keeps activation fully offline.
+
 ## Commands
 
 | Command | Description |
 | --- | --- |
-| `wvm install <version>` | Install a runtime (`latest` for newest, `lts` for the newest LTS). `--default` to set it as default. |
+| `wvm install <spec>` | Install a runtime (spec: `latest`, `lts`, `24`, `24.0`, or `24.0.1`). `--default` to set it as default. |
 | `wvm list [--all]` | List all available versions; `lts`/installed/default/seed marked. `--all` includes prereleases. |
 | `wvm uninstall <version>` | Remove an installed runtime (`--force` past app deps; the seed cannot be removed). |
 | `wvm register <app-dir>` | Record an app's runtime dependency from its `wvm.toml` `[app]`. |
 | `wvm unregister <name>` | Drop an application's registration. |
 | `wvm apps` | List registered applications and the runtimes they depend on. |
-| `wvm default <version>` | Set the persistent default (used by new shells). |
-| `wvm use <version>` | Switch the runtime for the current shell (needs `shell-init`). |
+| `wvm default <spec>` | Set the persistent default (used by new shells); floats when given `latest`/`lts`/`24`/`24.0`. |
+| `wvm use <spec>` | Switch the runtime for the current shell (needs `shell-init`); accepts a floating spec. |
 | `wvm deactivate` | Clear the per-shell override, reverting to the default. |
 | `wvm shell-init` | Print the shell hook that enables per-shell `use`. |
 | `wvm current` | Print the effective version (session override, else default). |
@@ -104,13 +125,18 @@ downloaded on bootstrap rather than bundled.
 
 `wvm exec` resolves a runtime in this order:
 
-1. **Project pin** — nearest `wvm.toml` walking up from the working directory:
+1. **Project pin** — nearest `wvm.toml` walking up from the working directory
+   (the runtime may be a floating spec like `44`):
    ```toml
    [wvm]
-   runtime = "44.0.0"
+   runtime = "44"
    ```
 2. **Session** — `WVM_VERSION`, set per shell by `wvm use`.
 3. **Default** — the persistent default set by `wvm default`.
+
+Each of these holds a [version spec](#version-specifiers); a floating one
+resolves to the newest matching installed release (and auto-installs a newer
+match at activation).
 4. **Environment override** — `WASM_RUNTIME_HOME` or `WASMTIME_HOME`.
 5. **System / PATH** — a `wasmtime` already on `PATH`.
 
@@ -157,8 +183,9 @@ multiple versions share identical files:
     versions/44.0.0/
       bin/wasmtime                     # materialized from the store
       manifest.json
-    default                            # persistent default version (plain text)
+    default                            # persistent default spec (plain text, e.g. `24`)
   downloads/
+  cache/releases.json                  # cached remote release list (refresh-interval bounded)
   index.db                             # SQLite backlink/metadata index (rebuildable cache)
   wvm-app.wasm                         # the app component
   config.toml

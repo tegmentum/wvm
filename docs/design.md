@@ -543,12 +543,42 @@ independently.
 Two layers, nvm-style:
 
 - **default** — persistent (`runtimes/wasmtime/default`), used by new shells;
-  set with `wvm default <version>`.
+  set with `wvm default <spec>`.
 - **session** — the `WVM_VERSION` environment variable, set per shell by
-  `wvm use <version>`, overriding the default for the current session only.
+  `wvm use <spec>`, overriding the default for the current session only.
 
 Resolution order (`wvm exec` and `wvm current`): project pin (`wvm.toml`) →
 session (`WVM_VERSION`) → default → `WASMTIME_HOME` → `PATH`.
+
+#### Version specifiers
+
+Each selection layer stores a **spec**, not a frozen version, parsed by
+`VersionSpec` in `wvm-core`:
+
+| Spec | Meaning |
+| --- | --- |
+| `latest` | newest available |
+| `lts` | newest LTS line (major divisible by 12) |
+| `24` / `24.x` | latest `24.*` (float minor + patch) |
+| `24.0` / `24.0.x` | latest `24.0.*` (float patch) |
+| `24.0.1` | exact / frozen |
+
+A spec resolves against a candidate set (installed, or the remote release list)
+by picking the newest match. Storing the spec means `wvm default 24` keeps
+tracking the newest installed `24.x` automatically.
+
+**Offline vs. auto-install.** `discovery::resolve` (used by the native `exec`
+path) is offline: a floating spec resolves against the *installed* set only, so
+a plain `exec` never blocks on the network. Auto-install is layered on top:
+
+- Setting a floating `default`/`use` installs the newest match immediately (the
+  app has `wasi:http`), then stores the spec.
+- At activation, the bootstrapper consults the cached release list
+  (`cache/releases.json`, TTL from `WVM_REFRESH_INTERVAL`, default 3600s; `0`
+  stays fully offline). If a newer matching release exists it delegates to the
+  app's internal `ensure <spec>` command to install it before `exec`, discarding
+  that step's stdout so the runtime's own stdout stays clean. A fresh cache with
+  no newer match skips launching the app entirely.
 
 Because `wvm` is a binary it cannot mutate its parent shell, so per-shell `use`
 relies on a shell hook (`wvm shell-init`): when `wvm use` runs with stdout

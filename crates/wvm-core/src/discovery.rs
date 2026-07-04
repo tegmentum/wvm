@@ -4,9 +4,16 @@
 //! - **default** — persistent (`runtimes/wasmtime/default`), used by new shells.
 //! - **session** — the `WVM_VERSION` environment variable, set per shell, which
 //!   overrides the default for the current session only.
+//!
+//! Each of pin/session/default stores a [`VersionSpec`] (e.g. `latest`, `24`,
+//! `24.0.1`) rather than a frozen version, so a floating pin like `24` tracks
+//! the newest installed `24.*` automatically. Resolution here is **offline**:
+//! specs resolve against the *installed* set. Pulling a newer matching version
+//! from the network (auto-install) is layered on top at the activation boundary.
 
 use crate::layout::{Layout, WASMTIME};
-use anyhow::{bail, Context, Result};
+use crate::spec::VersionSpec;
+use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use std::path::{Path, PathBuf};
 
@@ -33,7 +40,8 @@ pub struct Resolved {
     pub source: String,
 }
 
-/// Find a project pin by walking up from `start`.
+/// Find a project pin by walking up from `start`. Returns the raw spec string
+/// and the file it came from.
 pub fn find_pin(start: &Path) -> Result<Option<(String, PathBuf)>> {
     let mut dir = Some(start);
     while let Some(d) = dir {
@@ -52,24 +60,57 @@ pub fn find_pin(start: &Path) -> Result<Option<(String, PathBuf)>> {
     Ok(None)
 }
 
-/// The persistent default version, if set.
+/// Installed versions (those with a `manifest.json`), sorted ascending.
+pub fn installed_versions(layout: &Layout) -> Result<Vec<String>> {
+    let dir = layout.versions_dir(WASMTIME);
+    let mut versions = Vec::new();
+    if dir.exists() {
+        for entry in
+            std::fs::read_dir(&dir).with_context(|| format!("reading {}", dir.display()))?
+        {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if name.starts_with('.') {
+                continue;
+            }
+            if entry.path().join("manifest.json").is_file() {
+                versions.push(name);
+            }
+        }
+    }
+    versions.sort_by(|a, b| crate::version_cmp(a, b));
+    Ok(versions)
+}
+
+/// Resolve a spec string against the installed set (offline). `None` when the
+/// spec is unparseable or nothing installed matches.
+pub fn resolve_installed(layout: &Layout, spec_str: &str) -> Option<String> {
+    let spec = VersionSpec::parse(spec_str).ok()?;
+    let installed = installed_versions(layout).ok()?;
+    spec.resolve(&installed).map(str::to_string)
+}
+
+/// The persistent default spec, if set.
 pub fn default_version(layout: &Layout) -> Option<String> {
     let text = std::fs::read_to_string(layout.default_file(WASMTIME)).ok()?;
     let v = text.trim();
     (!v.is_empty()).then(|| v.to_string())
 }
 
-/// Write the persistent default version.
-pub fn set_default_version(layout: &Layout, version: &str) -> Result<()> {
+/// Write the persistent default spec.
+pub fn set_default_version(layout: &Layout, spec: &str) -> Result<()> {
     let path = layout.default_file(WASMTIME);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&path, version).with_context(|| format!("writing {}", path.display()))?;
+    std::fs::write(&path, spec).with_context(|| format!("writing {}", path.display()))?;
     Ok(())
 }
 
-/// The per-session override (`WVM_VERSION`), if set.
+/// The per-session override spec (`WVM_VERSION`), if set.
 pub fn session_version() -> Option<String> {
     match std::env::var(SESSION_VAR) {
         Ok(v) if !v.trim().is_empty() => Some(v.trim().to_string()),
@@ -77,13 +118,36 @@ pub fn session_version() -> Option<String> {
     }
 }
 
-/// The effective selected version and where it came from: session overrides
-/// default.
-pub fn effective_version(layout: &Layout) -> Option<(String, &'static str)> {
+/// The effective **spec** and where it came from: session overrides default.
+/// This is the raw request (`24`), not what it resolves to.
+pub fn effective_spec(layout: &Layout) -> Option<(String, &'static str)> {
     if let Some(v) = session_version() {
         return Some((v, "session"));
     }
     default_version(layout).map(|v| (v, "default"))
+}
+
+/// The effective **resolved** version (spec resolved against the installed
+/// set) and its source. `None` when no spec is set or nothing installed
+/// matches it.
+pub fn effective_version(layout: &Layout) -> Option<(String, &'static str)> {
+    let (spec_str, src) = effective_spec(layout)?;
+    let resolved = resolve_installed(layout, &spec_str)?;
+    Some((resolved, src))
+}
+
+/// The effective spec including the **project pin**, which needs the real
+/// working directory (not available inside the app sandbox). Order: pin →
+/// session → default. Used by the native bootstrapper for activation-time
+/// auto-install.
+pub fn effective_spec_at(layout: &Layout, cwd: &Path) -> Result<Option<(String, String)>> {
+    if let Some((spec, file)) = find_pin(cwd)? {
+        return Ok(Some((spec, format!("project pin ({})", file.display()))));
+    }
+    if let Some(v) = session_version() {
+        return Ok(Some((v, "session".to_string())));
+    }
+    Ok(default_version(layout).map(|v| (v, "default".to_string())))
 }
 
 fn binary_in_version(layout: &Layout, version: &str) -> PathBuf {
@@ -93,38 +157,62 @@ fn binary_in_version(layout: &Layout, version: &str) -> PathBuf {
         .join("wasmtime")
 }
 
+/// Describe a resolution for the `source` field, showing `spec -> version` only
+/// when the spec floats.
+fn describe(spec: &VersionSpec, resolved: &str, src: &str) -> String {
+    if spec.is_floating() {
+        format!("{src} ({spec} -> {resolved})")
+    } else {
+        format!("{src} ({resolved})")
+    }
+}
+
 /// Resolve a wasmtime binary following the discovery order:
 /// project pin → session (`WVM_VERSION`) → default → `WASMTIME_HOME` → PATH.
+///
+/// Floating specs resolve against the installed set; this call never touches the
+/// network.
 pub fn resolve(layout: &Layout, cwd: &Path) -> Result<Resolved> {
-    // 1. Project pin
-    if let Some((version, file)) = find_pin(cwd)? {
-        let bin = binary_in_version(layout, &version);
-        if bin.exists() {
-            return Ok(Resolved {
-                binary: bin,
-                source: format!("project pin ({}) -> {version}", file.display()),
-            });
+    let installed = installed_versions(layout)?;
+
+    // 1. Project pin — a pin that names an unsatisfiable spec is a hard error
+    //    (the user asked for it explicitly here).
+    if let Some((spec_str, file)) = find_pin(cwd)? {
+        let spec =
+            VersionSpec::parse(&spec_str).map_err(|e| anyhow!("{e} (in {})", file.display()))?;
+        match spec.resolve(&installed) {
+            Some(version) if binary_in_version(layout, version).exists() => {
+                return Ok(Resolved {
+                    binary: binary_in_version(layout, version),
+                    source: describe(&spec, version, &format!("project pin ({})", file.display())),
+                });
+            }
+            _ => bail!(
+                "project pins wasmtime '{spec}' (from {}) but no matching version is installed; run `wvm install {spec}`",
+                file.display()
+            ),
         }
-        bail!(
-            "project pins wasmtime {version} (from {}) but it is not installed; run `wvm install {version}`",
-            file.display()
-        );
     }
 
-    // 2. Session override, then 3. default.
-    for (version, src) in [
+    // 2. Session override, then 3. default. Unsatisfiable specs fall through.
+    for (spec_str, src) in [
         session_version().map(|v| (v, "session")),
         default_version(layout).map(|v| (v, "default")),
     ]
     .into_iter()
     .flatten()
     {
-        let bin = binary_in_version(layout, &version);
-        if bin.exists() {
-            return Ok(Resolved {
-                binary: bin,
-                source: format!("{src} ({version})"),
-            });
+        let Ok(spec) = VersionSpec::parse(&spec_str) else {
+            continue;
+        };
+        if let Some(version) = spec.resolve(&installed) {
+            let bin = binary_in_version(layout, version);
+            if bin.exists() {
+                return Ok(Resolved {
+                    binary: bin,
+                    source: describe(&spec, version, src),
+                });
+            }
         }
     }
 
