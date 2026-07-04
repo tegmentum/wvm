@@ -32,17 +32,7 @@ pub fn run() -> Result<()> {
     let resolve_dir = cwd.clone().unwrap_or_else(|| PathBuf::from("."));
     let resolved = wvm_core::discovery::resolve(&layout, &resolve_dir)?;
 
-    // Record the invocation unless the user opted out. Never fatal.
-    if std::env::var_os("WVM_NO_USAGE").is_none() {
-        let entry = UsageEntry {
-            version: resolved_version(&resolved.binary, &resolved.source),
-            app: env_nonempty("WVM_APP"),
-            caller: detect_caller(),
-            cwd: cwd.as_ref().map(|c| c.display().to_string()),
-            invoked_at: now_epoch(),
-        };
-        let _ = usage::record(&layout, &entry);
-    }
+    record_invocation(&layout, &resolved, cwd.as_deref());
 
     if std::env::var_os("WVM_VERBOSE").is_some() {
         eprintln!(
@@ -56,6 +46,27 @@ pub fn run() -> Result<()> {
     let mut cmd = Command::new(&resolved.binary);
     cmd.args(&args);
     exec_or_run(cmd, &resolved.binary)
+}
+
+/// Record one runtime invocation to the usage log, unless `WVM_NO_USAGE` is
+/// set. Shared by the shim and `wvm exec` — both are real runtime uses. Never
+/// fatal.
+pub(crate) fn record_invocation(
+    layout: &Layout,
+    resolved: &wvm_core::discovery::Resolved,
+    cwd: Option<&Path>,
+) {
+    if std::env::var_os("WVM_NO_USAGE").is_some() {
+        return;
+    }
+    let entry = UsageEntry {
+        version: resolved_version(&resolved.binary, &resolved.source),
+        app: env_nonempty("WVM_APP"),
+        caller: detect_caller(),
+        cwd: cwd.map(|c| c.display().to_string()),
+        invoked_at: now_epoch(),
+    };
+    let _ = usage::record(layout, &entry);
 }
 
 /// `…/versions/<version>/bin/wasmtime` → `<version>`; otherwise the source

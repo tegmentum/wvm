@@ -118,6 +118,10 @@ fn exec_runtime(layout: &Layout, raw: &[String]) -> Result<()> {
         );
     }
 
+    // Record the invocation, same as the shim — `wvm exec` is just as much a
+    // real runtime use as a call routed through `shims/wasmtime`.
+    shim::record_invocation(layout, &resolved, Some(&cwd));
+
     // Materialized runtime files are copies (symlink-free under wasm) and may
     // lack the executable bit; restore it before exec.
     ensure_executable(&resolved.binary);
