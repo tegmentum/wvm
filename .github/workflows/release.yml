@@ -10,6 +10,8 @@ permissions:
 jobs:
   build:
     name: ${{ matrix.label }}
+    # Publish releases only while the repo is public (see ci.yml).
+    if: ${{ !github.event.repository.private }}
     strategy:
       fail-fast: false
       matrix:

@@ -10,6 +10,10 @@ permissions:
 
 jobs:
   build:
+    # Only run on GitHub while the repo is public. Private → skipped (iterate
+    # locally with `make act`, which sees no repository payload and still runs);
+    # flipping the repo public makes this run automatically, no edits needed.
+    if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
