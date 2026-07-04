@@ -448,10 +448,7 @@ pub fn gc(prune: bool) -> Result<()> {
     let reclaimable: i64 = unreferenced.iter().map(|(_, s)| *s).sum();
     if unreferenced.is_empty() {
         println!("Nothing to reclaim.");
-        return Ok(());
-    }
-
-    if prune {
+    } else if prune {
         for (digest, _) in &unreferenced {
             let p = layout.object_path(digest);
             if p.exists() {
@@ -470,6 +467,59 @@ pub fn gc(prune: bool) -> Result<()> {
             unreferenced.len(),
             human_bytes(reclaimable.max(0) as u64)
         );
+    }
+
+    report_stale_runtimes(&layout, &index)?;
+    Ok(())
+}
+
+/// Advisory: installed runtimes not used in a while and safe to consider for
+/// removal (not the seed, default, or an app dependency). Judged only when
+/// there is observed usage to compare against — otherwise there is no basis and
+/// nothing is printed. `WVM_STALE_DAYS` overrides the 90-day threshold.
+fn report_stale_runtimes(layout: &Layout, index: &ComponentIndex) -> Result<()> {
+    let usage: std::collections::HashMap<String, i64> = index
+        .usage_by_version()?
+        .into_iter()
+        .map(|u| (u.version, u.last_used))
+        .collect();
+    if usage.is_empty() {
+        return Ok(()); // no observations yet — can't judge staleness
+    }
+
+    let threshold_days: i64 = std::env::var("WVM_STALE_DAYS")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(90);
+    let now = now_epoch();
+    let seed = seed_version(layout);
+    let default_resolved =
+        discovery::default_version(layout).and_then(|s| discovery::resolve_installed(layout, &s));
+
+    let mut stale: Vec<(String, String)> = Vec::new();
+    for v in installed_versions(layout)? {
+        if seed.as_deref() == Some(v.as_str()) || default_resolved.as_deref() == Some(v.as_str()) {
+            continue;
+        }
+        if !index.apps_using(&v).unwrap_or_default().is_empty() {
+            continue;
+        }
+        match usage.get(v.as_str()) {
+            Some(&t) => {
+                let age = (now - t) / 86400;
+                if age >= threshold_days {
+                    stale.push((v, format!("last used {age}d ago")));
+                }
+            }
+            None => stale.push((v, "never used".to_string())),
+        }
+    }
+
+    if !stale.is_empty() {
+        println!("\nStale runtimes (unused ≥ {threshold_days}d; not seed/default/app-required):");
+        for (v, note) in stale {
+            println!("  {v}   {note}   → wvm uninstall {v}");
+        }
     }
     Ok(())
 }

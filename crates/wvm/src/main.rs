@@ -275,6 +275,9 @@ fn app_command(layout: &Layout, args: &[String], extra_dir: Option<&Path>) -> Re
     if let Ok(v) = std::env::var("WVM_REFRESH_INTERVAL") {
         cmd.arg("--env").arg(format!("WVM_REFRESH_INTERVAL={v}"));
     }
+    if let Ok(v) = std::env::var("WVM_STALE_DAYS") {
+        cmd.arg("--env").arg(format!("WVM_STALE_DAYS={v}"));
+    }
     // Forward the per-session override so the app reflects it in
     // list/current and resolution.
     if let Ok(v) = std::env::var(wvm_core::discovery::SESSION_VAR) {

@@ -97,7 +97,7 @@ for one line, or `wvm upgrade --all` to bump every installed major line.
 | `wvm path [version]` | Print a runtime's filesystem path. |
 | `wvm exec -- <args>` | Run the selected runtime, forwarding arguments. |
 | `wvm verify [version]` | Validate installation integrity against manifests. |
-| `wvm gc [--prune]` | Report (or delete) unreferenced store objects. |
+| `wvm gc [--prune]` | Report (or delete) unreferenced store objects; also hints stale runtimes (unused, not seed/default/app-required). |
 | `wvm objects` | List stored objects with sizes and the versions referencing them. |
 
 ## Architecture
@@ -196,9 +196,12 @@ wvm usage --limit 50
 ```
 
 The log is ingested into the `usage` table (SQLite) the next time a wvm command
-runs. Observation only covers runtimes reached through `PATH`; an app that
-hardcodes an absolute runtime path is invisible here — which is what
-registration is for.
+runs. `wvm list` annotates installed runtimes with when they were last used, and
+`wvm gc` hints runtimes unused for a while (default 90 days, `WVM_STALE_DAYS`
+overrides) that are safe to consider removing — excluding the seed, the default,
+and any app-required version. Observation only covers runtimes reached through
+`PATH`; an app that hardcodes an absolute runtime path is invisible here — which
+is what registration is for.
 
 ## Storage layout
 
