@@ -73,7 +73,9 @@ keeps tracking the newest `24.x` as patches land. Setting a floating default (or
 shell), a floating spec auto-installs a newer matching release if one has
 appeared; the remote release list is cached (`WVM_REFRESH_INTERVAL` seconds,
 default 3600) so this doesn't hit the network on every call, and
-`WVM_REFRESH_INTERVAL=0` keeps activation fully offline.
+`WVM_REFRESH_INTERVAL=0` keeps activation fully offline. To advance a floating
+line on demand (forcing a fresh check), run `wvm upgrade` — `wvm upgrade 24`
+for one line, or `wvm upgrade --all` to bump every installed major line.
 
 ## Commands
 
@@ -81,13 +83,14 @@ default 3600) so this doesn't hit the network on every call, and
 | --- | --- |
 | `wvm install <spec>` | Install a runtime (spec: `latest`, `lts`, `24`, `24.0`, or `24.0.1`). `--default` to set it as default. |
 | `wvm list [--all]` | List all available versions; `lts`/installed/default/seed marked. `--all` includes prereleases. |
-| `wvm uninstall <version>` | Remove an installed runtime (`--force` past app deps; the seed cannot be removed). |
+| `wvm uninstall <spec>` | Remove an installed runtime (spec resolves to the newest installed match; `--force` past app deps; the seed cannot be removed). |
 | `wvm register <app-dir>` | Record an app's runtime dependency from its `wvm.toml` `[app]`. |
 | `wvm unregister <name>` | Drop an application's registration. |
 | `wvm apps` | List registered applications and the runtimes they depend on. |
 | `wvm usage [--limit N]` | Show runtime invocations observed via the pass-through shim. |
 | `wvm default <spec>` | Set the persistent default (used by new shells); floats when given `latest`/`lts`/`24`/`24.0`. |
 | `wvm use <spec>` | Switch the runtime for the current shell (needs `shell-init`); accepts a floating spec. |
+| `wvm upgrade [spec] [--all]` | Pull the newest match for a floating line now (default: the default's line; `--all`: every installed major line). |
 | `wvm deactivate` | Clear the per-shell override, reverting to the default. |
 | `wvm shell-init` | Print the shell hook that enables per-shell `use`. |
 | `wvm current` | Print the effective version (session override, else default). |

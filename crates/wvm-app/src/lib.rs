@@ -60,6 +60,7 @@ impl exports::wasi::cli::run::Guest for Component {
                 Some(v) => commands::use_version(v),
                 None => missing_arg("use <version>"),
             },
+            "upgrade" => commands::upgrade(positional, flag("--all")),
             "deactivate" => commands::deactivate(),
             "shell-init" => commands::shell_init(),
             "register" => match positional {
@@ -133,6 +134,7 @@ fn print_help() {
     println!("  path [spec]          Print a runtime's filesystem path");
     println!("  default <spec>       Set the persistent default (floats: latest/lts/24/24.0)");
     println!("  use <spec>           Switch the runtime for the current shell (needs shell-init)");
+    println!("  upgrade [spec] [--all]  Pull the newest match for a floating line now");
     println!("  deactivate           Clear the per-shell override (revert to default)");
     println!("  shell-init           Print the shell hook enabling per-shell `use`");
     println!("  uninstall <version>  Remove an installed runtime (--force past app deps)");

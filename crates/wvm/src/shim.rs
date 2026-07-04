@@ -75,8 +75,8 @@ fn env_nonempty(key: &str) -> Option<String> {
     std::env::var(key).ok().filter(|v| !v.trim().is_empty())
 }
 
-/// Best-effort invoking process name. Linux exposes it via `/proc`; elsewhere
-/// we rely on `WVM_APP`.
+/// Best-effort invoking process name. Linux reads `/proc`; macOS shells out to
+/// `ps`; elsewhere we rely on `WVM_APP`.
 #[cfg(target_os = "linux")]
 fn detect_caller() -> Option<String> {
     let ppid = std::os::unix::process::parent_id();
@@ -86,7 +86,26 @@ fn detect_caller() -> Option<String> {
     })
 }
 
-#[cfg(not(target_os = "linux"))]
+#[cfg(target_os = "macos")]
+fn detect_caller() -> Option<String> {
+    let ppid = std::os::unix::process::parent_id();
+    let out = std::process::Command::new("/bin/ps")
+        .args(["-o", "comm=", "-p", &ppid.to_string()])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8_lossy(&out.stdout);
+    let name = s.trim();
+    let base = Path::new(name)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(name);
+    (!base.is_empty()).then(|| base.to_string())
+}
+
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
 fn detect_caller() -> Option<String> {
     None
 }

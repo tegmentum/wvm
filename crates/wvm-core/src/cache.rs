@@ -50,6 +50,14 @@ pub fn write(layout: &Layout, all: bool, versions: &[String], now: i64) -> Resul
     Ok(())
 }
 
+/// Drop the cached release lists so the next fetch hits the network (used by
+/// `wvm upgrade` to force a fresh check).
+pub fn clear(layout: &Layout) {
+    for all in [false, true] {
+        let _ = std::fs::remove_file(layout.release_cache_file(all));
+    }
+}
+
 /// Refresh interval in seconds. `WVM_REFRESH_INTERVAL` overrides the default;
 /// `0` disables network refresh entirely (activation resolves offline).
 pub fn refresh_interval() -> i64 {

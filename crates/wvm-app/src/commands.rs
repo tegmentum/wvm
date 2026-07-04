@@ -12,7 +12,7 @@ use wvm_core::appmanifest::AppManifest;
 use wvm_core::index::{ingest_usage_log, reindex, Index};
 use wvm_core::layout::{Layout, WASMTIME};
 use wvm_core::manifest::Manifest;
-use wvm_core::{discovery, human_bytes, normalize_version, version_cmp, VersionSpec};
+use wvm_core::{cache, discovery, human_bytes, normalize_version, version_cmp, VersionSpec};
 
 fn now_epoch() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -48,6 +48,21 @@ pub fn list(all: bool) -> Result<()> {
 
     let installed = installed_versions(&layout)?;
     let installed_set: HashSet<&str> = installed.iter().map(String::as_str).collect();
+
+    // Best-effort last-used annotations from the usage table (ingesting any
+    // pending shim invocations first). Never fatal to listing.
+    let now = now_epoch();
+    let usage_map: std::collections::HashMap<String, i64> = {
+        let mut idx = open_index(&layout).ok();
+        if let Some(i) = idx.as_mut() {
+            let _ = ingest_usage_log(i, &layout);
+        }
+        idx.and_then(|i| i.usage_by_version().ok())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|u| (u.version, u.last_used))
+            .collect()
+    };
 
     // Try the remote list; fall back to installed-only when offline.
     let (mut versions, offline) = match install::fetch_release_versions(all) {
@@ -105,7 +120,13 @@ pub fn list(all: bool) -> Result<()> {
         } else {
             format!("  [{}]", tags.join(", "))
         };
-        println!("{marker} {v}{suffix}");
+        let usage_note = match usage_map.get(v.as_str()) {
+            Some(&t) if installed_set.contains(v.as_str()) => {
+                format!("  · used {}", humanize_ago(now, t))
+            }
+            _ => String::new(),
+        };
+        println!("{marker} {v}{suffix}{usage_note}");
     }
     if offline {
         eprintln!("(offline: only installed versions shown)");
@@ -178,6 +199,63 @@ pub fn set_default(spec_arg: &str) -> Result<()> {
         println!("Default is now '{spec}' (currently wasmtime {resolved}, used by new shells)");
     } else {
         println!("Default is now wasmtime {resolved} (used by new shells)");
+    }
+    Ok(())
+}
+
+/// `wvm upgrade [spec] [--all]` — pull the newest matching release for a
+/// floating line now (rather than waiting for activation-time auto-install).
+/// No arg upgrades the default (when it floats); `--all` bumps every installed
+/// major line to its newest available patch.
+pub fn upgrade(spec_arg: Option<&str>, all: bool) -> Result<()> {
+    let layout = Layout::discover()?;
+    // Force a fresh remote check regardless of the cache TTL.
+    cache::clear(&layout);
+
+    if all {
+        let installed = discovery::installed_versions(&layout)?;
+        let mut majors: Vec<u64> = installed
+            .iter()
+            .filter_map(|v| v.split('.').next().and_then(|m| m.parse().ok()))
+            .collect();
+        majors.sort_unstable();
+        majors.dedup();
+        if majors.is_empty() {
+            println!("Nothing installed to upgrade.");
+            return Ok(());
+        }
+        for m in majors {
+            upgrade_one(&layout, &m.to_string())?;
+        }
+        return Ok(());
+    }
+
+    match spec_arg {
+        Some(s) => upgrade_one(&layout, s),
+        None => match discovery::default_version(&layout) {
+            Some(spec_str) => {
+                let spec = VersionSpec::parse(&spec_str).map_err(|e| anyhow!(e))?;
+                if !spec.is_floating() {
+                    println!("Default is pinned to exact {spec_str}; nothing to upgrade.");
+                    return Ok(());
+                }
+                upgrade_one(&layout, &spec_str)
+            }
+            None => {
+                println!("No default set; pass a spec (e.g. `wvm upgrade 24`) or `--all`.");
+                Ok(())
+            }
+        },
+    }
+}
+
+fn upgrade_one(layout: &Layout, spec_str: &str) -> Result<()> {
+    let before = discovery::resolve_installed(layout, spec_str);
+    let after = install::ensure(spec_str)?;
+    match before {
+        Some(b) if b == after => println!("{spec_str}: already up to date ({after})"),
+        Some(b) => println!("{spec_str}: {b} → {after}"),
+        None => println!("{spec_str}: installed {after}"),
     }
     Ok(())
 }
@@ -255,7 +333,12 @@ const SHELL_HOOK: &str = r#"wvm() {
 
 pub fn uninstall(version_arg: &str, force: bool) -> Result<()> {
     let layout = Layout::discover()?;
-    let version = normalize_version(version_arg);
+    // Accept a spec: `uninstall 24` resolves to the newest installed 24.x.
+    let version = discovery::resolve_installed(&layout, version_arg)
+        .unwrap_or_else(|| normalize_version(version_arg));
+    if version != normalize_version(version_arg) {
+        eprintln!("Resolved '{version_arg}' to installed wasmtime {version}");
+    }
 
     if seed_version(&layout).as_deref() == Some(version.as_str()) {
         bail!("wasmtime {version} is the protected seed runtime and cannot be removed");
