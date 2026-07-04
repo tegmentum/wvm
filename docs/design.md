@@ -665,8 +665,16 @@ is the app's own opt-in label, otherwise the parent process name where the OS
 exposes it. `WVM_NO_USAGE=1` opts out.
 
 ```text
-usage(id, version, app, caller, cwd, invoked_at)
+usage(id, version, runtime_path, app, caller, cwd,
+      args, module, module_path, module_sha256, invoked_at)
 ```
+
+Each invocation captures the full run: the resolved version and runtime binary
+path, the module (as given, its canonical path, and its `sha256`), the complete
+argv, and the app/caller/cwd/time. `args` is stored as a JSON array; the module
+is identified best-effort (first positional that is a file or `.wasm`/`.wat`/
+`.cwasm`), while the raw `args` remain the ground truth. New columns are added to
+older DBs via an `ALTER TABLE` migration guarded by `PRAGMA table_info`.
 
 This inverts the dependency arrow — instead of app → wvm, it is
 wvm → (observing) → app — and complements registration: the shim sees only

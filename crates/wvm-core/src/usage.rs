@@ -13,12 +13,15 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 
-/// One recorded runtime invocation.
+/// One recorded runtime invocation, capturing the full context of the run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageEntry {
     /// Resolved runtime version (or a source label like `PATH` for external
     /// runtimes).
     pub version: String,
+    /// Absolute path of the runtime binary that ran.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_path: Option<String>,
     /// Self-identified application (`WVM_APP`), if set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub app: Option<String>,
@@ -28,6 +31,19 @@ pub struct UsageEntry {
     /// Working directory at invocation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cwd: Option<String>,
+    /// Full argument vector forwarded to the runtime (flags, options, and the
+    /// module together — the ground truth of what ran).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// The module argument as given on the command line (best-effort).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module: Option<String>,
+    /// Canonical absolute path of the module, if it resolved to a file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module_path: Option<String>,
+    /// `sha256` of the module bytes, if a module file was identified.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub module_sha256: Option<String>,
     /// Unix timestamp (seconds).
     pub invoked_at: i64,
 }

@@ -180,15 +180,18 @@ calls `wasmtime` therefore routes through wvm, which:
 
 1. resolves the active version (pin → session → default, floating specs
    included, auto-installing a newer match if needed);
-2. records `{version, app, caller, cwd, time}` to `usage.log` — one cheap
-   append, no database on the hot path;
+2. records the full run to `usage.log` — the resolved **version** and runtime
+   **binary path**, the **module** run with its absolute path and **sha256**,
+   the complete **argv** (flags and options), the **app** (`WVM_APP`), the
+   **caller**, the **cwd**, and the **time** — one cheap append, no database on
+   the hot path;
 3. execs the real runtime, forwarding all arguments.
 
-The app needs to know nothing about wvm — the dependency arrow flips from
-app → wvm to wvm → (observing) → app. Set `WVM_APP=<name>` in an app's
-environment for a clean self-identification; otherwise the caller is
-best-effort (the parent process name where available). `WVM_NO_USAGE=1` opts a
-process out of recording.
+`wvm exec` records the same way. The app needs to know nothing about wvm — the
+dependency arrow flips from app → wvm to wvm → (observing) → app. Set
+`WVM_APP=<name>` in an app's environment for a clean self-identification;
+otherwise the caller is best-effort (the parent process name where available).
+`WVM_NO_USAGE=1` opts a process out of recording.
 
 ```sh
 wvm usage            # per-version counts + recent invocations

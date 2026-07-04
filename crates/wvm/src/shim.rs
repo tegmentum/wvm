@@ -32,7 +32,7 @@ pub fn run() -> Result<()> {
     let resolve_dir = cwd.clone().unwrap_or_else(|| PathBuf::from("."));
     let resolved = wvm_core::discovery::resolve(&layout, &resolve_dir)?;
 
-    record_invocation(&layout, &resolved, cwd.as_deref());
+    record_invocation(&layout, &resolved, cwd.as_deref(), &args);
 
     if std::env::var_os("WVM_VERBOSE").is_some() {
         eprintln!(
@@ -49,24 +49,62 @@ pub fn run() -> Result<()> {
 }
 
 /// Record one runtime invocation to the usage log, unless `WVM_NO_USAGE` is
-/// set. Shared by the shim and `wvm exec` — both are real runtime uses. Never
-/// fatal.
+/// set. Shared by the shim and `wvm exec` — both are real runtime uses. Captures
+/// the full argv plus the identified module's path and sha256. Never fatal.
 pub(crate) fn record_invocation(
     layout: &Layout,
     resolved: &wvm_core::discovery::Resolved,
     cwd: Option<&Path>,
+    args: &[String],
 ) {
     if std::env::var_os("WVM_NO_USAGE").is_some() {
         return;
     }
+    let module = identify_module(args);
+    let module_path = module
+        .as_deref()
+        .and_then(|m| std::fs::canonicalize(m).ok())
+        .map(|p| p.display().to_string());
+    let module_sha256 = module
+        .as_deref()
+        .and_then(|m| wvm_core::hash::sha256_file(Path::new(m)).ok());
+
     let entry = UsageEntry {
         version: resolved_version(&resolved.binary, &resolved.source),
+        runtime_path: Some(resolved.binary.display().to_string()),
         app: env_nonempty("WVM_APP"),
         caller: detect_caller(),
         cwd: cwd.map(|c| c.display().to_string()),
+        args: args.to_vec(),
+        module,
+        module_path,
+        module_sha256,
         invoked_at: now_epoch(),
     };
     let _ = usage::record(layout, &entry);
+}
+
+/// Best-effort: the module argument in a wasmtime command line — the first
+/// positional that is an existing file or has a wasm-ish extension, skipping
+/// flags and known subcommands. The full `args` are recorded regardless, so
+/// this only drives the module-path/sha256 capture.
+fn identify_module(args: &[String]) -> Option<String> {
+    const SUBCOMMANDS: &[&str] = &[
+        "run", "serve", "compile", "explore", "settings", "wast", "config", "help",
+    ];
+    for a in args {
+        if a.starts_with('-') || SUBCOMMANDS.contains(&a.as_str()) {
+            continue;
+        }
+        if Path::new(a).is_file()
+            || a.ends_with(".wasm")
+            || a.ends_with(".wat")
+            || a.ends_with(".cwasm")
+        {
+            return Some(a.clone());
+        }
+    }
+    None
 }
 
 /// `…/versions/<version>/bin/wasmtime` → `<version>`; otherwise the source

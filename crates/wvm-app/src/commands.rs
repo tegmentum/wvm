@@ -639,14 +639,30 @@ pub fn usage(limit: i64) -> Result<()> {
         println!("\nRecent invocations:");
         for e in &recent {
             let who = e.app.as_deref().or(e.caller.as_deref()).unwrap_or("?");
-            let cwd = e.cwd.as_deref().unwrap_or("");
             println!(
-                "  {:<8} {:<18} {}  {}",
+                "  {} · {} · {}",
                 e.version,
                 who,
-                humanize_ago(now, e.invoked_at),
-                cwd
+                humanize_ago(now, e.invoked_at)
             );
+            if let Some(m) = &e.module {
+                let base = Path::new(m)
+                    .file_name()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(m);
+                let sha = e
+                    .module_sha256
+                    .as_deref()
+                    .map(|s| &s[..s.len().min(12)])
+                    .unwrap_or("-");
+                println!("      module  {base} ({sha})");
+            }
+            if !e.args.is_empty() {
+                println!("      args    {}", e.args.join(" "));
+            }
+            if let Some(cwd) = &e.cwd {
+                println!("      cwd     {cwd}");
+            }
         }
     }
     Ok(())

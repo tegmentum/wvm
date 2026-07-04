@@ -30,10 +30,23 @@ const SCHEMA: &[&str] = &[
         version TEXT NOT NULL, PRIMARY KEY (app, version))",
     "CREATE INDEX IF NOT EXISTS idx_app_runtimes_version ON app_runtimes(version)",
     "CREATE TABLE IF NOT EXISTS usage (\
-        id INTEGER PRIMARY KEY, version TEXT NOT NULL, app TEXT, caller TEXT, \
-        cwd TEXT, invoked_at INTEGER NOT NULL)",
+        id INTEGER PRIMARY KEY, version TEXT NOT NULL, runtime_path TEXT, \
+        app TEXT, caller TEXT, cwd TEXT, args TEXT, module TEXT, \
+        module_path TEXT, module_sha256 TEXT, invoked_at INTEGER NOT NULL)",
     "CREATE INDEX IF NOT EXISTS idx_usage_version ON usage(version)",
     "CREATE INDEX IF NOT EXISTS idx_usage_invoked_at ON usage(invoked_at)",
+    // The module_sha256 index is created after the column migration below, since
+    // a pre-existing `usage` table may not have that column yet.
+];
+
+/// Columns added to `usage` after its first release; ensured via ALTER for DBs
+/// created before they existed.
+const USAGE_ADDED_COLUMNS: &[&str] = &[
+    "runtime_path",
+    "args",
+    "module",
+    "module_path",
+    "module_sha256",
 ];
 
 pub struct ComponentIndex {
@@ -50,7 +63,31 @@ impl ComponentIndex {
                 .map_err(dberr)
                 .with_context(|| format!("applying schema: {stmt}"))?;
         }
-        Ok(ComponentIndex { conn })
+        let index = ComponentIndex { conn };
+        index.migrate_usage_columns()?;
+        Ok(index)
+    }
+
+    /// Add any `usage` columns missing from an older DB (SQLite has no
+    /// `ADD COLUMN IF NOT EXISTS`, so check `table_info` first).
+    fn migrate_usage_columns(&self) -> Result<()> {
+        let info = self.query("PRAGMA table_info(usage)", &[])?;
+        let present: std::collections::HashSet<String> = info
+            .rows
+            .iter()
+            .filter_map(|r| r.columns.get(1).and_then(as_text))
+            .collect();
+        for col in USAGE_ADDED_COLUMNS {
+            if !present.contains(*col) {
+                self.exec(&format!("ALTER TABLE usage ADD COLUMN {col} TEXT"), &[])?;
+            }
+        }
+        // Safe now that module_sha256 is guaranteed to exist.
+        self.exec(
+            "CREATE INDEX IF NOT EXISTS idx_usage_module_sha256 ON usage(module_sha256)",
+            &[],
+        )?;
+        Ok(())
     }
 
     fn exec(&self, sql: &str, params: &[sql::Value]) -> Result<()> {
@@ -299,14 +336,22 @@ impl Index for ComponentIndex {
         self.exec("BEGIN", &[])?;
         let result = (|| {
             for e in entries {
+                let args_json = serde_json::to_string(&e.args).unwrap_or_else(|_| "[]".to_string());
                 self.exec(
-                    "INSERT INTO usage(version, app, caller, cwd, invoked_at) \
-                     VALUES(?, ?, ?, ?, ?)",
+                    "INSERT INTO usage(\
+                        version, runtime_path, app, caller, cwd, args, module, \
+                        module_path, module_sha256, invoked_at) \
+                     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     &[
                         text(&e.version),
+                        opt_text(e.runtime_path.as_deref()),
                         opt_text(e.app.as_deref()),
                         opt_text(e.caller.as_deref()),
                         opt_text(e.cwd.as_deref()),
+                        text(&args_json),
+                        opt_text(e.module.as_deref()),
+                        opt_text(e.module_path.as_deref()),
+                        opt_text(e.module_sha256.as_deref()),
                         int(e.invoked_at),
                     ],
                 )?;
@@ -323,7 +368,8 @@ impl Index for ComponentIndex {
 
     fn recent_usage(&self, limit: i64) -> Result<Vec<UsageEntry>> {
         let rows = self.query(
-            "SELECT version, app, caller, cwd, invoked_at FROM usage \
+            "SELECT version, runtime_path, app, caller, cwd, args, module, \
+                    module_path, module_sha256, invoked_at FROM usage \
              ORDER BY invoked_at DESC, id DESC LIMIT ?",
             &[int(limit)],
         )?;
@@ -331,12 +377,23 @@ impl Index for ComponentIndex {
             .rows
             .iter()
             .filter_map(|r| {
+                let args = r
+                    .columns
+                    .get(5)
+                    .and_then(as_text)
+                    .and_then(|s| serde_json::from_str(&s).ok())
+                    .unwrap_or_default();
                 Some(UsageEntry {
                     version: r.columns.first().and_then(as_text)?,
-                    app: r.columns.get(1).and_then(as_text),
-                    caller: r.columns.get(2).and_then(as_text),
-                    cwd: r.columns.get(3).and_then(as_text),
-                    invoked_at: r.columns.get(4).and_then(as_int).unwrap_or(0),
+                    runtime_path: r.columns.get(1).and_then(as_text),
+                    app: r.columns.get(2).and_then(as_text),
+                    caller: r.columns.get(3).and_then(as_text),
+                    cwd: r.columns.get(4).and_then(as_text),
+                    args,
+                    module: r.columns.get(6).and_then(as_text),
+                    module_path: r.columns.get(7).and_then(as_text),
+                    module_sha256: r.columns.get(8).and_then(as_text),
+                    invoked_at: r.columns.get(9).and_then(as_int).unwrap_or(0),
                 })
             })
             .collect())
