@@ -18,22 +18,22 @@ class Wvm < Formula
   on_macos do
     on_arm do
       url "https://github.com/tegmentum/wvm/releases/download/v#{version}/wvm-aarch64-macos"
-      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+      sha256 "560b2de17f4c7528f99a1f22517e65aadadd12beee5e973926683b335df35b60"
     end
     on_intel do
       url "https://github.com/tegmentum/wvm/releases/download/v#{version}/wvm-x86_64-macos"
-      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+      sha256 "4eec3fc8efa8247923e326e1eb40d42ca9ad00223318c7db25d69f8e807e9218"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/tegmentum/wvm/releases/download/v#{version}/wvm-aarch64-linux"
-      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+      sha256 "f8d84a56bd88e045d9b635732fcc344ccad53d93546a1bcd9145f5f5eda10163"
     end
     on_intel do
       url "https://github.com/tegmentum/wvm/releases/download/v#{version}/wvm-x86_64-linux"
-      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
+      sha256 "283aedea4be8ca7059068fbd05b1e140d3aa84bc7ba504a9e356d7b986bcf3c1"
     end
   end
 
