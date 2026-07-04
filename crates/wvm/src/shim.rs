@@ -8,6 +8,7 @@
 
 use crate::{ensure_active_runtime, ensure_executable, exec_or_run, now_epoch};
 use anyhow::Result;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use wvm_core::layout::Layout;
@@ -16,7 +17,11 @@ use wvm_core::usage::{self, UsageEntry};
 pub fn run() -> Result<()> {
     let layout = Layout::discover()?;
     let _ = std::fs::create_dir_all(&layout.root);
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let raw: Vec<String> = std::env::args().skip(1).collect();
+    // A leading `--no-usage` opts this invocation out of recording; everything
+    // else is forwarded to the runtime unchanged.
+    let no_usage = raw.first().map(String::as_str) == Some("--no-usage");
+    let args: Vec<String> = if no_usage { raw[1..].to_vec() } else { raw };
     let cwd = std::env::current_dir().ok();
 
     // Activation-time auto-install for a floating active spec (best-effort;
@@ -32,7 +37,9 @@ pub fn run() -> Result<()> {
     let resolve_dir = cwd.clone().unwrap_or_else(|| PathBuf::from("."));
     let resolved = wvm_core::discovery::resolve(&layout, &resolve_dir)?;
 
-    record_invocation(&layout, &resolved, cwd.as_deref(), &args);
+    if !no_usage {
+        record_invocation(&layout, &resolved, cwd.as_deref(), &args);
+    }
 
     if std::env::var_os("WVM_VERBOSE").is_some() {
         eprintln!(
@@ -65,9 +72,7 @@ pub(crate) fn record_invocation(
         .as_deref()
         .and_then(|m| std::fs::canonicalize(m).ok())
         .map(|p| p.display().to_string());
-    let module_sha256 = module
-        .as_deref()
-        .and_then(|m| wvm_core::hash::sha256_file(Path::new(m)).ok());
+    let module_sha256 = module.as_deref().and_then(|m| hash_module(Path::new(m)));
 
     let entry = UsageEntry {
         version: resolved_version(&resolved.binary, &resolved.source),
@@ -82,6 +87,33 @@ pub(crate) fn record_invocation(
         invoked_at: now_epoch(),
     };
     let _ = usage::record(layout, &entry);
+}
+
+/// Hash a module's bytes for the usage record, warning interactively before a
+/// large read so the user knows how to opt out. The warning is gated on an
+/// stderr terminal so it never pollutes an app's output when run non-interactively.
+fn hash_module(path: &Path) -> Option<String> {
+    if let Ok(meta) = std::fs::metadata(path) {
+        let threshold = large_module_threshold();
+        if threshold > 0 && meta.len() >= threshold && std::io::stderr().is_terminal() {
+            eprintln!(
+                "wvm: hashing large module ({}) for usage tracking; \
+                 opt out with `--no-usage` or WVM_NO_USAGE=1",
+                wvm_core::human_bytes(meta.len())
+            );
+        }
+    }
+    wvm_core::hash::sha256_file(path).ok()
+}
+
+/// Module-size threshold (bytes) above which hashing warns. `WVM_HASH_WARN_MB`
+/// overrides the 100 MiB default; `0` disables the warning.
+fn large_module_threshold() -> u64 {
+    std::env::var("WVM_HASH_WARN_MB")
+        .ok()
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(100)
+        .saturating_mul(1024 * 1024)
 }
 
 /// Best-effort: the module argument in a wasmtime command line — the first

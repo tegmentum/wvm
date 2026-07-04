@@ -95,7 +95,7 @@ for one line, or `wvm upgrade --all` to bump every installed major line.
 | `wvm shell-init` | Print the shell hook that enables per-shell `use`. |
 | `wvm current` | Print the effective version (session override, else default). |
 | `wvm path [version]` | Print a runtime's filesystem path. |
-| `wvm exec -- <args>` | Run the selected runtime, forwarding arguments. |
+| `wvm exec [--no-usage] -- <args>` | Run the selected runtime, forwarding arguments (`--no-usage` skips recording). |
 | `wvm verify [version]` | Validate installation integrity against manifests. |
 | `wvm gc [--prune]` | Report (or delete) unreferenced store objects; also hints stale runtimes (unused, not seed/default/app-required). |
 | `wvm objects` | List stored objects with sizes and the versions referencing them. |
@@ -191,7 +191,20 @@ calls `wasmtime` therefore routes through wvm, which:
 dependency arrow flips from app → wvm to wvm → (observing) → app. Set
 `WVM_APP=<name>` in an app's environment for a clean self-identification;
 otherwise the caller is best-effort (the parent process name where available).
-`WVM_NO_USAGE=1` opts a process out of recording.
+
+**Opting out.** Either set `WVM_NO_USAGE=1` in the environment, or pass a leading
+`--no-usage` flag:
+
+```sh
+wasmtime --no-usage run big.wasm      # via the shim
+wvm exec --no-usage -- run big.wasm   # via exec
+```
+
+Hashing the module is the only non-trivial cost; it's skipped when there's no
+module (e.g. `wasmtime --version`). If a module is large, wvm prints a warning
+(only when stderr is a terminal, so it never pollutes an app's piped output)
+pointing at these opt-outs. The threshold is 100 MiB, overridable with
+`WVM_HASH_WARN_MB` (`0` disables the warning).
 
 ```sh
 wvm usage            # per-version counts + recent invocations

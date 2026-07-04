@@ -90,13 +90,27 @@ fn register_dir(args: &mut [String]) -> Option<std::path::PathBuf> {
     Some(abs)
 }
 
-/// `wvm exec [--] <args>` — resolve the user's selected runtime and replace
-/// this process with it, forwarding the arguments.
+/// `wvm exec [--no-usage] [--] <args>` — resolve the user's selected runtime and
+/// replace this process with it, forwarding the arguments. Leading `--no-usage`
+/// opts the invocation out of usage recording; a `--` separates wvm options from
+/// the runtime's own arguments.
 fn exec_runtime(layout: &Layout, raw: &[String]) -> Result<()> {
-    let forwarded: &[String] = match raw.first() {
-        Some(first) if first == "--" => &raw[1..],
-        _ => raw,
-    };
+    let mut no_usage = false;
+    let mut rest = raw;
+    loop {
+        match rest.first().map(String::as_str) {
+            Some("--no-usage") => {
+                no_usage = true;
+                rest = &rest[1..];
+            }
+            Some("--") => {
+                rest = &rest[1..];
+                break;
+            }
+            _ => break,
+        }
+    }
+    let forwarded = rest;
 
     let cwd = std::env::current_dir().context("getting current directory")?;
 
@@ -120,7 +134,9 @@ fn exec_runtime(layout: &Layout, raw: &[String]) -> Result<()> {
 
     // Record the invocation, same as the shim — `wvm exec` is just as much a
     // real runtime use as a call routed through `shims/wasmtime`.
-    shim::record_invocation(layout, &resolved, Some(&cwd), forwarded);
+    if !no_usage {
+        shim::record_invocation(layout, &resolved, Some(&cwd), forwarded);
+    }
 
     // Materialized runtime files are copies (symlink-free under wasm) and may
     // lack the executable bit; restore it before exec.
