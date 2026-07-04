@@ -5,8 +5,9 @@
 
 use crate::sql;
 use anyhow::{anyhow, Context, Result};
-use wvm_core::index::{AppRecord, Index, Stats};
+use wvm_core::index::{AppRecord, Index, Stats, VersionUsage};
 use wvm_core::manifest::Manifest;
+use wvm_core::usage::UsageEntry;
 
 /// Schema statements, applied one at a time (the high-level `execute` runs a
 /// single statement).
@@ -28,6 +29,11 @@ const SCHEMA: &[&str] = &[
         app TEXT NOT NULL REFERENCES apps(name) ON DELETE CASCADE, \
         version TEXT NOT NULL, PRIMARY KEY (app, version))",
     "CREATE INDEX IF NOT EXISTS idx_app_runtimes_version ON app_runtimes(version)",
+    "CREATE TABLE IF NOT EXISTS usage (\
+        id INTEGER PRIMARY KEY, version TEXT NOT NULL, app TEXT, caller TEXT, \
+        cwd TEXT, invoked_at INTEGER NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS idx_usage_version ON usage(version)",
+    "CREATE INDEX IF NOT EXISTS idx_usage_invoked_at ON usage(invoked_at)",
 ];
 
 pub struct ComponentIndex {
@@ -283,6 +289,75 @@ impl Index for ComponentIndex {
             .rows
             .iter()
             .filter_map(|r| r.columns.first().and_then(as_text))
+            .collect())
+    }
+
+    fn record_usage(&mut self, entries: &[UsageEntry]) -> Result<()> {
+        if entries.is_empty() {
+            return Ok(());
+        }
+        self.exec("BEGIN", &[])?;
+        let result = (|| {
+            for e in entries {
+                self.exec(
+                    "INSERT INTO usage(version, app, caller, cwd, invoked_at) \
+                     VALUES(?, ?, ?, ?, ?)",
+                    &[
+                        text(&e.version),
+                        opt_text(e.app.as_deref()),
+                        opt_text(e.caller.as_deref()),
+                        opt_text(e.cwd.as_deref()),
+                        int(e.invoked_at),
+                    ],
+                )?;
+            }
+            Ok(())
+        })();
+        if result.is_ok() {
+            self.exec("COMMIT", &[])?;
+        } else {
+            let _ = self.exec("ROLLBACK", &[]);
+        }
+        result
+    }
+
+    fn recent_usage(&self, limit: i64) -> Result<Vec<UsageEntry>> {
+        let rows = self.query(
+            "SELECT version, app, caller, cwd, invoked_at FROM usage \
+             ORDER BY invoked_at DESC, id DESC LIMIT ?",
+            &[int(limit)],
+        )?;
+        Ok(rows
+            .rows
+            .iter()
+            .filter_map(|r| {
+                Some(UsageEntry {
+                    version: r.columns.first().and_then(as_text)?,
+                    app: r.columns.get(1).and_then(as_text),
+                    caller: r.columns.get(2).and_then(as_text),
+                    cwd: r.columns.get(3).and_then(as_text),
+                    invoked_at: r.columns.get(4).and_then(as_int).unwrap_or(0),
+                })
+            })
+            .collect())
+    }
+
+    fn usage_by_version(&self) -> Result<Vec<VersionUsage>> {
+        let rows = self.query(
+            "SELECT version, COUNT(*), MAX(invoked_at) FROM usage \
+             GROUP BY version ORDER BY MAX(invoked_at) DESC",
+            &[],
+        )?;
+        Ok(rows
+            .rows
+            .iter()
+            .filter_map(|r| {
+                Some(VersionUsage {
+                    version: r.columns.first().and_then(as_text)?,
+                    count: r.columns.get(1).and_then(as_int).unwrap_or(0),
+                    last_used: r.columns.get(2).and_then(as_int).unwrap_or(0),
+                })
+            })
             .collect())
     }
 }

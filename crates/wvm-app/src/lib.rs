@@ -71,6 +71,10 @@ impl exports::wasi::cli::run::Guest for Component {
                 None => missing_arg("unregister <name>"),
             },
             "apps" => commands::apps(),
+            "usage" => {
+                let limit = flag_value(&args, "--limit").unwrap_or(20);
+                commands::usage(limit)
+            }
             "uninstall" => match positional {
                 Some(v) => commands::uninstall(v, flag("--force")),
                 None => missing_arg("uninstall <version>"),
@@ -105,6 +109,20 @@ fn missing_arg(usage: &str) -> anyhow::Result<()> {
     anyhow::bail!("usage: wvm {usage}")
 }
 
+/// Parse an integer option in either `--name N` or `--name=N` form.
+fn flag_value(args: &[String], name: &str) -> Option<i64> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == name {
+            return it.next().and_then(|v| v.parse().ok());
+        }
+        if let Some(rest) = a.strip_prefix(name).and_then(|r| r.strip_prefix('=')) {
+            return rest.parse().ok();
+        }
+    }
+    None
+}
+
 fn print_help() {
     println!("wvm — WebAssembly Version Manager");
     println!();
@@ -121,6 +139,7 @@ fn print_help() {
     println!("  register <app-dir>   Record an app's runtime dependency (reads its wvm.toml)");
     println!("  unregister <name>    Drop an application's registration");
     println!("  apps                 List registered applications and their runtimes");
+    println!("  usage [--limit N]    Show runtime invocations observed via the shim");
     println!("  verify [version]     Validate installation integrity");
     println!("  gc [--prune]         Report/reclaim unreferenced store objects");
     println!("  objects              List stored objects and their backlinks");

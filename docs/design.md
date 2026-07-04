@@ -644,6 +644,36 @@ Because the bootstrapper sandboxes the app to `WVM_HOME`, `wvm register <dir>`
 is given an additional preopen of the (canonicalized) app directory so the app
 can read the manifest there.
 
+### Transparent usage tracking (the pass-through shim)
+
+Registration captures *declared* intent. The **shim** captures *observed* usage
+with zero coupling. `shims/wasmtime` is the `wvm` binary linked under another
+name; `wvm shell-init` prepends `shims/` to `PATH`. An app that calls
+`wasmtime` then re-enters wvm (busybox-style `argv[0]` dispatch), which:
+
+1. resolves the active version (the same pin → session → default order and
+   floating-spec auto-install as `wvm exec`);
+2. appends `{version, app, caller, cwd, invoked_at}` to `usage.log` — a single
+   native append, deliberately avoiding a WASM boot or DB write on the hot path;
+3. execs the real runtime (an absolute store path, so `PATH` is not re-consulted
+   and there is no recursion).
+
+The log is drained into a `usage` table by the app on the next command that
+touches the index (`usage`, `apps`, `gc`); the drain renames the log aside first
+so a concurrent shim append is never lost. Identity is best-effort: `WVM_APP`
+is the app's own opt-in label, otherwise the parent process name where the OS
+exposes it. `WVM_NO_USAGE=1` opts out.
+
+```text
+usage(id, version, app, caller, cwd, invoked_at)
+```
+
+This inverts the dependency arrow — instead of app → wvm, it is
+wvm → (observing) → app — and complements registration: the shim sees only
+runtimes reached through `PATH`, while registration covers apps that hardcode a
+runtime and never touch the shim. `reindex` never clears `usage` (or `apps`);
+they are observed/declared history, not a cache derived from the store.
+
 ---
 
 ## Future Expansion

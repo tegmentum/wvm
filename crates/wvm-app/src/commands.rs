@@ -9,7 +9,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use std::collections::HashSet;
 use std::path::Path;
 use wvm_core::appmanifest::AppManifest;
-use wvm_core::index::{reindex, Index};
+use wvm_core::index::{ingest_usage_log, reindex, Index};
 use wvm_core::layout::{Layout, WASMTIME};
 use wvm_core::manifest::Manifest;
 use wvm_core::{discovery, human_bytes, normalize_version, version_cmp, VersionSpec};
@@ -227,14 +227,20 @@ pub fn deactivate() -> Result<()> {
     Ok(())
 }
 
-/// `wvm shell-init` — print the shell function enabling per-shell `wvm use`.
+/// `wvm shell-init` — print the shell integration: put the shim on `PATH` (so
+/// apps that call `wasmtime` route through wvm) and define the `use` hook.
 pub fn shell_init() -> Result<()> {
+    let layout = Layout::discover()?;
+    let shims = layout.shims_dir();
+    println!("# wvm shell integration — add to ~/.zshrc or ~/.bashrc");
+    println!("# Put the wvm shim ahead of PATH so `wasmtime` routes through wvm");
+    println!("# (resolves the active version and records usage transparently).");
+    println!("export PATH=\"{}:$PATH\"", shims.display());
     print!("{SHELL_HOOK}");
     Ok(())
 }
 
-const SHELL_HOOK: &str = r#"# wvm shell integration — add to ~/.zshrc or ~/.bashrc
-wvm() {
+const SHELL_HOOK: &str = r#"wvm() {
   case "$1" in
     use|deactivate)
       local __wvm_out
@@ -343,7 +349,8 @@ pub fn verify(version_arg: Option<&str>) -> Result<()> {
 pub fn gc(prune: bool) -> Result<()> {
     let layout = Layout::discover()?;
     let mut index = open_index(&layout)?;
-    // Reconcile from authoritative on-disk state before deciding.
+    // Flush any pending shim invocations, then reconcile object state.
+    let _ = ingest_usage_log(&mut index, &layout);
     reindex(&mut index, &layout)?;
 
     let stats = index.stats()?;
@@ -467,10 +474,70 @@ pub fn unregister(name: &str) -> Result<()> {
     Ok(())
 }
 
+/// `wvm usage [--limit N]` — show observed runtime invocations recorded by the
+/// pass-through shim (transparent tracking; no app registration required).
+pub fn usage(limit: i64) -> Result<()> {
+    let layout = Layout::discover()?;
+    let mut index = open_index(&layout)?;
+    ingest_usage_log(&mut index, &layout)?;
+
+    let by_version = index.usage_by_version()?;
+    if by_version.is_empty() {
+        println!("No runtime usage recorded yet.");
+        println!(
+            "Put the shim on PATH (`wvm shell-init`) so apps that call `wasmtime` are tracked."
+        );
+        return Ok(());
+    }
+
+    let now = now_epoch();
+    println!("Runtime usage (observed via the shim):");
+    for u in &by_version {
+        println!(
+            "  {:<10} {:>6} run(s), last {}",
+            u.version,
+            u.count,
+            humanize_ago(now, u.last_used)
+        );
+    }
+
+    let recent = index.recent_usage(limit)?;
+    if !recent.is_empty() {
+        println!("\nRecent invocations:");
+        for e in &recent {
+            let who = e.app.as_deref().or(e.caller.as_deref()).unwrap_or("?");
+            let cwd = e.cwd.as_deref().unwrap_or("");
+            println!(
+                "  {:<8} {:<18} {}  {}",
+                e.version,
+                who,
+                humanize_ago(now, e.invoked_at),
+                cwd
+            );
+        }
+    }
+    Ok(())
+}
+
+/// Render `then` as a coarse "… ago" relative to `now`.
+fn humanize_ago(now: i64, then: i64) -> String {
+    let d = (now - then).max(0);
+    if d < 60 {
+        format!("{d}s ago")
+    } else if d < 3600 {
+        format!("{}m ago", d / 60)
+    } else if d < 86400 {
+        format!("{}h ago", d / 3600)
+    } else {
+        format!("{}d ago", d / 86400)
+    }
+}
+
 /// `wvm apps` — list registered applications and the runtimes they depend on.
 pub fn apps() -> Result<()> {
     let layout = Layout::discover()?;
-    let index = open_index(&layout)?;
+    let mut index = open_index(&layout)?;
+    ingest_usage_log(&mut index, &layout)?;
     let apps = index.list_apps()?;
     if apps.is_empty() {
         println!("No applications registered. Register one with `wvm register <app-dir>`.");

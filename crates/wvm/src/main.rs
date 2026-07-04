@@ -6,6 +6,7 @@
 //! logic lives in the app (`wvm-app`), executed as a WebAssembly component.
 
 mod seed;
+mod shim;
 
 use anyhow::{bail, Context, Result};
 use std::path::Path;
@@ -16,7 +17,25 @@ use wvm_core::layout::Layout;
 static APP_WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/app.wasm"));
 
 fn main() {
-    if let Err(e) = run() {
+    // Busybox-style dispatch: when invoked under the shim name (`shims/wasmtime`
+    // is a link to this binary), act as the pass-through runtime shim rather
+    // than the `wvm` CLI.
+    let invoked_as = std::env::args()
+        .next()
+        .and_then(|p| {
+            Path::new(&p)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .map(str::to_string)
+        })
+        .unwrap_or_default();
+
+    let result = if invoked_as == "wasmtime" {
+        shim::run()
+    } else {
+        run()
+    };
+    if let Err(e) = result {
         eprintln!("error: {e:#}");
         std::process::exit(1);
     }
@@ -37,6 +56,10 @@ fn run() -> Result<()> {
     let layout = Layout::discover()?;
     std::fs::create_dir_all(&layout.root)
         .with_context(|| format!("creating {}", layout.root.display()))?;
+
+    // Keep the pass-through shim pointing at this binary (best-effort; inert
+    // until the user adds shims/ to PATH via `wvm shell-init`).
+    let _ = ensure_shim(&layout);
 
     // `exec` is handled natively: a wasm guest cannot spawn a process, and
     // project-pin discovery needs the user's real working directory (which is
@@ -163,6 +186,32 @@ fn now_epoch() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
+}
+
+/// Ensure `shims/wasmtime` points at the current `wvm` binary, so a `wasmtime`
+/// call routed through `PATH` re-enters this binary in shim mode.
+#[cfg(unix)]
+fn ensure_shim(layout: &Layout) -> Result<()> {
+    let exe = std::env::current_exe().context("locating the wvm binary")?;
+    let shim = layout.shim_bin("wasmtime");
+    if let Some(parent) = shim.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    // Re-point only when missing or stale.
+    match std::fs::read_link(&shim) {
+        Ok(target) if target == exe => return Ok(()),
+        _ => {
+            let _ = std::fs::remove_file(&shim);
+        }
+    }
+    std::os::unix::fs::symlink(&exe, &shim)
+        .with_context(|| format!("linking shim {}", shim.display()))?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn ensure_shim(_layout: &Layout) -> Result<()> {
+    Ok(())
 }
 
 #[cfg(unix)]

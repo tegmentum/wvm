@@ -20,6 +20,7 @@ pub mod materialize;
 pub mod platform;
 pub mod spec;
 pub mod store;
+pub mod usage;
 pub mod util;
 
 pub use spec::VersionSpec;

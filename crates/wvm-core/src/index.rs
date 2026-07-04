@@ -7,6 +7,7 @@
 
 use crate::layout::{Layout, WASMTIME};
 use crate::manifest::Manifest;
+use crate::usage::UsageEntry;
 use anyhow::Result;
 
 /// Summary statistics for `wvm gc` / `wvm objects` reporting.
@@ -15,6 +16,14 @@ pub struct Stats {
     pub objects: i64,
     pub referenced: i64,
     pub total_size: i64,
+}
+
+/// Observed-usage rollup for one runtime version.
+#[derive(Debug, Clone)]
+pub struct VersionUsage {
+    pub version: String,
+    pub count: i64,
+    pub last_used: i64,
 }
 
 /// A registered application and the runtimes it depends on (a cache of the
@@ -80,6 +89,29 @@ pub trait Index {
 
     /// Names of applications that depend on a given runtime version.
     fn apps_using(&self, version: &str) -> Result<Vec<String>>;
+
+    // --- observed usage (transparent tracking via the shim) --------------
+
+    /// Insert recorded invocations drained from the usage log.
+    fn record_usage(&mut self, entries: &[UsageEntry]) -> Result<()>;
+
+    /// Most recent invocations, newest first.
+    fn recent_usage(&self, limit: i64) -> Result<Vec<UsageEntry>>;
+
+    /// Per-version rollup: invocation count and last-used timestamp, most
+    /// recently used first.
+    fn usage_by_version(&self) -> Result<Vec<VersionUsage>>;
+}
+
+/// Drain the usage log into the `usage` table. Returns how many invocations
+/// were ingested. Safe to call before any command that reads usage.
+pub fn ingest_usage_log<I: Index>(index: &mut I, layout: &Layout) -> Result<usize> {
+    let entries = crate::usage::drain(layout)?;
+    if entries.is_empty() {
+        return Ok(0);
+    }
+    index.record_usage(&entries)?;
+    Ok(entries.len())
 }
 
 /// Rebuild the index from the authoritative on-disk state: every object file in

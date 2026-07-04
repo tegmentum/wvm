@@ -85,6 +85,7 @@ default 3600) so this doesn't hit the network on every call, and
 | `wvm register <app-dir>` | Record an app's runtime dependency from its `wvm.toml` `[app]`. |
 | `wvm unregister <name>` | Drop an application's registration. |
 | `wvm apps` | List registered applications and the runtimes they depend on. |
+| `wvm usage [--limit N]` | Show runtime invocations observed via the pass-through shim. |
 | `wvm default <spec>` | Set the persistent default (used by new shells); floats when given `latest`/`lts`/`24`/`24.0`. |
 | `wvm use <spec>` | Switch the runtime for the current shell (needs `shell-init`); accepts a floating spec. |
 | `wvm deactivate` | Clear the per-shell override, reverting to the default. |
@@ -167,6 +168,35 @@ still needs (listing the dependents; `--force` overrides). An app that sets
 `runtime-path` is fully decoupled: it's recorded for visibility but pins no
 wvm-managed runtime.
 
+## Transparent usage tracking
+
+Registration is *declared* intent; the shim gives you *observed* usage with
+**zero coupling**. `wvm shell-init` puts `shims/` on your `PATH`, where
+`shims/wasmtime` is the `wvm` binary under another name. An app that simply
+calls `wasmtime` therefore routes through wvm, which:
+
+1. resolves the active version (pin → session → default, floating specs
+   included, auto-installing a newer match if needed);
+2. records `{version, app, caller, cwd, time}` to `usage.log` — one cheap
+   append, no database on the hot path;
+3. execs the real runtime, forwarding all arguments.
+
+The app needs to know nothing about wvm — the dependency arrow flips from
+app → wvm to wvm → (observing) → app. Set `WVM_APP=<name>` in an app's
+environment for a clean self-identification; otherwise the caller is
+best-effort (the parent process name where available). `WVM_NO_USAGE=1` opts a
+process out of recording.
+
+```sh
+wvm usage            # per-version counts + recent invocations
+wvm usage --limit 50
+```
+
+The log is ingested into the `usage` table (SQLite) the next time a wvm command
+runs. Observation only covers runtimes reached through `PATH`; an app that
+hardcodes an absolute runtime path is invisible here — which is what
+registration is for.
+
 ## Storage layout
 
 WVM stores everything under `~/.tegmentum/wvm` (override with `WVM_HOME`). Files
@@ -184,8 +214,10 @@ multiple versions share identical files:
       bin/wasmtime                     # materialized from the store
       manifest.json
     default                            # persistent default spec (plain text, e.g. `24`)
+  shims/wasmtime                       # pass-through shim (link to the wvm binary)
   downloads/
   cache/releases.json                  # cached remote release list (refresh-interval bounded)
+  usage.log                            # shim invocation log, ingested into index.db
   index.db                             # SQLite backlink/metadata index (rebuildable cache)
   wvm-app.wasm                         # the app component
   config.toml

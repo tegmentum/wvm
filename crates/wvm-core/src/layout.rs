@@ -117,6 +117,26 @@ impl Layout {
         self.root.join("wvm-app.wasm")
     }
 
+    // --- pass-through shims + usage log ----------------------------------
+    // `shims/wasmtime` is the `wvm` binary under another name; when it is on
+    // `PATH`, apps that call `wasmtime` transparently route through it, which
+    // records the invocation and execs the resolved runtime.
+
+    pub fn shims_dir(&self) -> PathBuf {
+        self.root.join("shims")
+    }
+
+    /// Path of a named shim (e.g. `wasmtime`).
+    pub fn shim_bin(&self, name: &str) -> PathBuf {
+        self.shims_dir().join(name)
+    }
+
+    /// Append-only log of runtime invocations recorded by the shim, later
+    /// ingested into the `usage` table (JSON Lines).
+    pub fn usage_log(&self) -> PathBuf {
+        self.root.join("usage.log")
+    }
+
     /// Absolute path of a CAS object given its hex digest.
     pub fn object_path(&self, digest: &str) -> PathBuf {
         self.store_dir()
