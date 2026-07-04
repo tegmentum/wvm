@@ -166,6 +166,22 @@ pub fn install(version_arg: &str, make_default: bool) -> Result<()> {
     install_inner(version_arg, make_default, true)
 }
 
+/// Store the default as the *spec* the user asked for — so `install 24 --default`
+/// floats exactly like `wvm default 24` — while reporting the concrete version
+/// it resolves to now.
+fn store_default_spec(layout: &Layout, version_arg: &str, resolved: &str) -> Result<()> {
+    let spec = VersionSpec::parse(version_arg)
+        .map(|s| s.to_string())
+        .unwrap_or_else(|_| resolved.to_string());
+    discovery::set_default_version(layout, &spec)?;
+    if spec != resolved {
+        println!("Default is now '{spec}' (currently wasmtime {resolved}, used by new shells)");
+    } else {
+        println!("Default is now wasmtime {resolved} (used by new shells)");
+    }
+    Ok(())
+}
+
 fn install_inner(version_arg: &str, make_default: bool, auto_default: bool) -> Result<()> {
     let layout = Layout::discover()?;
     layout.ensure_base()?;
@@ -184,8 +200,7 @@ fn install_inner(version_arg: &str, make_default: bool, auto_default: bool) -> R
     if is_installed(&layout, &version) {
         println!("wasmtime {version} is already installed");
         if make_default {
-            discovery::set_default_version(&layout, &version)?;
-            println!("Default is now wasmtime {version}");
+            store_default_spec(&layout, version_arg, &version)?;
         }
         return Ok(());
     }
@@ -291,8 +306,7 @@ fn install_inner(version_arg: &str, make_default: bool, auto_default: bool) -> R
     // The first runtime installed becomes the default; otherwise honor
     // --default/--use.
     if make_default || (auto_default && discovery::default_version(&layout).is_none()) {
-        discovery::set_default_version(&layout, &version)?;
-        println!("Default is now wasmtime {version}");
+        store_default_spec(&layout, version_arg, &version)?;
     }
     Ok(())
 }
