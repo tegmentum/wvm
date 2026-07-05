@@ -8,9 +8,11 @@ permissions:
   contents: write
 
 jobs:
+  # Build each platform binary and upload it as a workflow artifact. No job
+  # touches the GitHub release here, so there is no concurrent-upload race.
   build:
     name: ${{ matrix.label }}
-    # Publish releases only while the repo is public (see ci.yml).
+    # Build only while the repo is public (see ci.yml).
     if: ${{ !github.event.repository.private }}
     strategy:
       fail-fast: false
@@ -18,37 +20,67 @@ jobs:
         include:
           - os: macos-14
             label: aarch64-macos
-          - os: macos-13
+            target: aarch64-apple-darwin
+          # Cross-compile the Intel macOS binary on the arm runner — the
+          # macos-13 (Intel) runners queue for a long time.
+          - os: macos-14
             label: x86_64-macos
+            target: x86_64-apple-darwin
           - os: ubuntu-latest
             label: x86_64-linux
+            target: x86_64-unknown-linux-gnu
           - os: ubuntu-24.04-arm
             label: aarch64-linux
+            target: aarch64-unknown-linux-gnu
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Rust (with wasm32-wasip2)
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: wasm32-wasip2
+          targets: wasm32-wasip2, ${{ matrix.target }}
 
-      - name: Build
-        run: cargo xtask build
+      - name: Build (app -> native, for ${{ matrix.target }})
+        run: |
+          cargo build -p wvm-app --target wasm32-wasip2 --release
+          WVM_APP_WASM="$PWD/target/wasm32-wasip2/release/wvm_app.wasm" \
+            cargo build -p wvm --release --target ${{ matrix.target }}
 
       - name: Package wvm-${{ matrix.label }}
         run: |
           bin="wvm-${{ matrix.label }}"
-          cp target/release/wvm "$bin"
+          cp "target/${{ matrix.target }}/release/wvm" "$bin"
           if command -v sha256sum >/dev/null 2>&1; then
             sha256sum "$bin" > "$bin.sha256"
           else
             shasum -a 256 "$bin" > "$bin.sha256"
           fi
 
-      - name: Upload to release
-        uses: softprops/action-gh-release@v2
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
         with:
-          files: |
+          name: wvm-${{ matrix.label }}
+          path: |
             wvm-${{ matrix.label }}
             wvm-${{ matrix.label }}.sha256
+          if-no-files-found: error
+
+  # A single job assembles all artifacts and publishes the release once.
+  publish:
+    name: publish
+    if: ${{ !github.event.repository.private }}
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          fail_on_unmatched_files: true
