@@ -42,14 +42,15 @@ wvm exec -- --version   # run the selected runtime
   (reverting when you open a new one), via a `WVM_VERSION` environment variable.
 
 Because `wvm` is a binary it can't change its parent shell directly, so per-shell
-`use` needs a one-time shell hook (like nvm/pyenv):
+`use` relies on a shell hook. **The `curl | sh` installer sets this up for you**
+(it wires the shim and the `use` hook into a sourced env file), so `wvm use
+44.0.0` and `wvm deactivate` work in new shells with no extra steps.
+
+If you installed another way (e.g. Homebrew) or want to wire it up manually:
 
 ```sh
 wvm shell-init >> ~/.zshrc   # then restart your shell
 ```
-
-After that, `wvm use 44.0.0` applies to the current shell and `wvm deactivate`
-reverts it to the default.
 
 ## Version specifiers
 
