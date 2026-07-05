@@ -87,7 +87,7 @@ for one line, or `wvm upgrade --all` to bump every installed major line.
 | `wvm apps` | List registered applications and the runtimes they depend on. |
 | `wvm usage [--limit N]` | Show runtime invocations observed via the pass-through shim. |
 | `wvm default <spec>` | Set the persistent default (used by new shells); floats when given `latest`/`lts`/`24`/`24.0`. |
-| `wvm use <spec>` | Switch the runtime for the current shell (needs `shell-init`); accepts a floating spec. |
+| `wvm use <spec>` | Switch the runtime for the current shell (via the shell hook the installer sets up); accepts a floating spec. |
 | `wvm upgrade [spec] [--all]` | Pull the newest match for a floating line now (default: the default's line; `--all`: every installed major line). |
 | `wvm deactivate` | Clear the per-shell override, reverting to the default. |
 | `wvm shell-init` | Print the shell hook that enables per-shell `use`. |
@@ -98,6 +98,20 @@ for one line, or `wvm upgrade --all` to bump every installed major line.
 | `wvm doctor` | Diagnose the install: WVM_HOME, seed, shim/PATH, shell hook, default — and list externally-installed wasmtimes. |
 | `wvm seed status` | Show the seed runtime version and whether a newer Wasmtime is available. |
 | `wvm seed upgrade [--check]` | Update the protected seed runtime to the latest Wasmtime. |
+| `wvm completions <bash\|zsh\|fish>` | Print a shell completion script (installed automatically by `curl \| sh`). |
+| `wvm --version` (`-V`) | Print the wvm version. |
+| `wvm --upgrade [--check]` | Update the `wvm` binary itself to the latest release. |
+
+### Shell completion
+
+Tab-completion for commands and installed versions is **set up automatically by
+the `curl | sh` installer** (for bash, zsh, and fish). To wire it up manually,
+`wvm completions <shell>` prints the script — e.g.:
+
+```sh
+wvm completions zsh > "${fpath[1]}/_wvm"          # zsh
+wvm completions bash > /etc/bash_completion.d/wvm  # bash
+```
 
 ## Architecture
 
