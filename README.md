@@ -276,11 +276,6 @@ CI runs on GitHub Actions (`.github/workflows/ci.yml`): format check, the full
 `release.yml`, which builds the `wvm-<arch>-<os>` binaries + checksums for each
 platform and attaches them to the release.
 
-**Both workflows are gated on repository visibility** (`if: ${{ !github.event.repository.private }}`):
-while the repo is **private** the jobs are skipped (don't burn Actions minutes on
-work you can't see anyway) — iterate locally with `cargo xtask act`. Flipping the
-repo **public** makes them run automatically, with no edits to the workflows.
-
 Run the same checks locally:
 
 ```sh
@@ -288,9 +283,7 @@ cargo xtask ci      # fmt + build + clippy + test, no Docker
 cargo xtask act     # run the CI workflow in Docker via nektos/act (uses .actrc)
 ```
 
-`cargo xtask act` runs the workflow regardless of visibility: `act` supplies no
-`repository.private` in its event payload, so the visibility gate evaluates
-truthy and the job runs. It needs a running Docker daemon (e.g.
+`cargo xtask act` needs a running Docker daemon (e.g.
 [Colima](https://github.com/abiosoft/colima): `colima start`). On Apple Silicon,
 `.actrc` pins `linux/amd64` to match GitHub-hosted runners.
 
