@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.3.0
+
+Zero-setup installs and self-management. A fresh install has a working runtime
+and a working `wvm use` immediately, and wvm can update itself.
+
+### Added
+
+- **Runtime out of the box** — the protected seed Wasmtime is adopted as the
+  initial default and discovery falls back to it, so `wvm exec` works before any
+  `wvm install`/`wvm default`. Managed installs still take precedence.
+- **`wvm --upgrade [--check]`** — self-update the native binary in place
+  (distinct from `wvm upgrade <spec>`, which manages runtimes). A throttled
+  notice points at it when a newer release is available; `WVM_NO_UPDATE_NOTIFIER`
+  opts out.
+- **Shell completions** — `wvm completions <bash|zsh|fish>`, installed
+  automatically by the installer. `use`/`default`/`upgrade` complete installed
+  versions (plus `latest`/`lts`); `uninstall` completes only installed ones.
+- **Automatic app registration** — an app with an `[app]` section in its
+  `wvm.toml` auto-registers when it runs through the shim or `wvm exec`, so
+  `uninstall` dependency-gating and `wvm apps` work without a manual
+  `wvm register`.
+
+### Changed
+
+- **Installer** now sets up `PATH` for your shell, installs completions, and
+  folds the shim + `wvm use` hook into the sourced env file — `wvm use` works
+  with no separate `wvm shell-init` step. Re-runs are idempotent and report
+  fresh/reinstall/upgrade. Fixes a `set -e` abort in `wire_rc` that skipped
+  completion and hook wiring on any re-run.
+- `wvm shell-init` is now handled natively (no runtime bootstrap), and its hook
+  lives in one place (`wvm-core::shell`).
+- `wvm use` and `wvm shell-init` name the rc file for your actual shell
+  (`~/.bashrc`, `~/.zshrc`, …) instead of assuming zsh.
+- `wvm usage` prints an aligned table and notes that it aggregates every shell
+  and `wvm exec`, not just the current one.
+- `wvm list` separates version tags with a tab so they line up.
+- The "Fetching available versions" spinner now animates (streamed response)
+  instead of showing a single static frame.
+
 ## 0.2.0
 
 The first release to publish platform binaries. Builds on the self-hosting
