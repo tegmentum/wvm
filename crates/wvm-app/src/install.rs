@@ -127,11 +127,11 @@ pub fn fetch_release_versions(all: bool) -> Result<Vec<String>> {
     let platform = Platform::detect()?;
     let http = WasiHttp;
 
-    let sp = Spinner::new("Fetching available versions");
     let url = format!("https://api.github.com/repos/{REPO}/releases?per_page=100");
-    let body = http.get_string(&url).context("fetching release list")?;
+    let body = http
+        .get_string_with_progress(&url, "Fetching available versions")
+        .context("fetching release list")?;
     let releases: Vec<Release> = serde_json::from_str(&body).context("parsing release list")?;
-    sp.finish(&format!("Fetched {} releases", releases.len()));
 
     let mut out = Vec::new();
     for r in &releases {

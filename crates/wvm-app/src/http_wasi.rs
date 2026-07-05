@@ -3,7 +3,7 @@
 //! `wasi:http` does not follow redirects, and GitHub redirects both API and
 //! release-asset requests, so this follows 3xx hops manually.
 
-use crate::progress::Bar;
+use crate::progress::{Bar, Spinner};
 use anyhow::{anyhow, bail, Result};
 use std::path::Path;
 use waki::Client;
@@ -98,6 +98,59 @@ impl WasiHttp {
 
             std::fs::write(dest, &buf).map_err(|e| anyhow!("writing {}: {e}", dest.display()))?;
             return Ok(buf.len() as u64);
+        }
+        bail!("too many redirects starting from {url}")
+    }
+}
+
+impl WasiHttp {
+    /// Like `get_string`, but streams the response body while animating a
+    /// spinner labelled `label`. Without threads under wasi a plain spinner
+    /// around a single blocking read can only draw one static frame; ticking
+    /// per chunk as the (sizeable) release-list JSON arrives makes it move.
+    pub fn get_string_with_progress(&self, url: &str, label: &str) -> Result<String> {
+        let mut sp = Spinner::new(label);
+        let mut current = url.to_string();
+        for _ in 0..MAX_REDIRECTS {
+            let resp = Client::new()
+                .get(&current)
+                .headers([
+                    ("User-Agent", USER_AGENT),
+                    ("Accept", "application/vnd.github+json"),
+                ])
+                .send()
+                .map_err(|e| anyhow!("GET {current}: {e}"))?;
+
+            let status = resp.status_code();
+            if (300..400).contains(&status) {
+                let location = resp
+                    .headers()
+                    .get("location")
+                    .and_then(|v| v.to_str().ok())
+                    .ok_or_else(|| anyhow!("redirect {status} from {current} had no Location"))?;
+                current = resolve_url(&current, location);
+                continue;
+            }
+            if !(200..300).contains(&status) {
+                bail!("unexpected HTTP {status} for {current}");
+            }
+
+            let mut buf: Vec<u8> = Vec::new();
+            while let Some(chunk) = resp
+                .chunk(64 * 1024)
+                .map_err(|e| anyhow!("reading body of {current}: {e}"))?
+            {
+                if chunk.is_empty() {
+                    break;
+                }
+                buf.extend_from_slice(&chunk);
+                sp.tick(&wvm_core::human_bytes(buf.len() as u64));
+            }
+            sp.finish(&format!(
+                "{label} ({})",
+                wvm_core::human_bytes(buf.len() as u64)
+            ));
+            return String::from_utf8(buf).map_err(|e| anyhow!("response was not UTF-8: {e}"));
         }
         bail!("too many redirects starting from {url}")
     }
