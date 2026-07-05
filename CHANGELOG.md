@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
+
+Operational hardening: the seed runtime can be updated, a `doctor` command,
+offline installs, and the first integration tests.
 
 ### Added
 
