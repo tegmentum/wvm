@@ -1,7 +1,7 @@
-# WVM — Wasmtime Version Manager
+# WVM: the Wasmtime Version Manager
 
 WVM is a lightweight runtime manager for [Wasmtime](https://wasmtime.dev). It
-installs, selects, discovers, validates, and executes versioned WebAssembly
+installs, selects, discovers, validates, and executes versioned Wasmtime
 runtimes so that Wasmtime becomes an implementation detail rather than a
 prerequisite.
 
@@ -25,6 +25,8 @@ brew install wvm
 
 On first run, `wvm` downloads and locks a protected seed Wasmtime runtime and
 runs as a WebAssembly component on it.
+
+Supported on macOS and Linux (arm64 and x86_64). Windows is not supported.
 
 ## Quickstart
 
@@ -72,7 +74,7 @@ shell), a floating spec auto-installs a newer matching release if one has
 appeared; the remote release list is cached (`WVM_REFRESH_INTERVAL` seconds,
 default 3600) so this doesn't hit the network on every call, and
 `WVM_REFRESH_INTERVAL=0` keeps activation fully offline. To advance a floating
-line on demand (forcing a fresh check), run `wvm upgrade` — `wvm upgrade 24`
+line on demand (forcing a fresh check), run `wvm upgrade`: `wvm upgrade 24`
 for one line, or `wvm upgrade --all` to bump every installed major line.
 
 ## Commands
@@ -95,7 +97,7 @@ for one line, or `wvm upgrade --all` to bump every installed major line.
 | `wvm path [version]` | Print a runtime's filesystem path. |
 | `wvm exec [--no-usage] -- <args>` | Run the selected runtime, forwarding arguments (`--no-usage` skips recording). |
 | `wvm verify [version]` | Validate installation integrity against manifests. |
-| `wvm doctor` | Diagnose the install: WVM_HOME, seed, shim/PATH, shell hook, default — and list externally-installed wasmtimes. |
+| `wvm doctor` | Diagnose the install (WVM_HOME, seed, shim/PATH, shell hook, default) and list externally-installed wasmtimes. |
 | `wvm seed status` | Show the seed runtime version and whether a newer Wasmtime is available. |
 | `wvm seed upgrade [--check]` | Update the protected seed runtime to the latest Wasmtime. |
 | `wvm completions <bash\|zsh\|fish>` | Print a shell completion script (installed automatically by `curl \| sh`). |
@@ -106,7 +108,7 @@ for one line, or `wvm upgrade --all` to bump every installed major line.
 
 Tab-completion for commands and installed versions is **set up automatically by
 the `curl | sh` installer** (for bash, zsh, and fish). To wire it up manually,
-`wvm completions <shell>` prints the script — e.g.:
+`wvm completions <shell>` prints the script, e.g.:
 
 ```sh
 wvm completions zsh > "${fpath[1]}/_wvm"          # zsh
@@ -121,7 +123,7 @@ wvm (native bootstrapper, on PATH)
   ├─ handles `wvm exec` natively (resolve runtime, then exec)
   └─ runs the app on the seed:  wasmtime run -S http --dir WVM_HOME wvm-app.wasm -- <args>
 
-wvm-app (wasm32-wasip2 component) — all other commands
+wvm-app (wasm32-wasip2 component): all other commands
   ├─ explicit wasi:cli command: include wasi:cli/imports + export wasi:cli/run@0.2.6
   └─ imports wasi:http               (downloads, via waki)
 ```
@@ -143,29 +145,28 @@ bootstrap rather than bundled.
 
 `wvm exec` resolves a runtime in this order:
 
-1. **Project pin** — nearest `wvm.toml` walking up from the working directory
+1. **Project pin**: nearest `wvm.toml` walking up from the working directory
    (the runtime may be a floating spec like `44`):
    ```toml
    [wvm]
    runtime = "44"
    ```
-2. **Session** — `WVM_VERSION`, set per shell by `wvm use`.
-3. **Default** — the persistent default set by `wvm default`.
+2. **Session**: `WVM_VERSION`, set per shell by `wvm use`.
+3. **Default**: the persistent default set by `wvm default`.
+4. **Environment override**: `WASM_RUNTIME_HOME` or `WASMTIME_HOME`.
+5. **System / PATH**: a `wasmtime` already on `PATH`.
 
-Each of these holds a [version spec](#version-specifiers); a floating one
-resolves to the newest matching installed release (and auto-installs a newer
-match at activation).
-4. **Environment override** — `WASM_RUNTIME_HOME` or `WASMTIME_HOME`.
-5. **System / PATH** — a `wasmtime` already on `PATH`.
-
-Set `WVM_VERBOSE=1` to print which runtime was selected.
+Each of pin/session/default holds a [version spec](#version-specifiers); a
+floating one resolves to the newest matching installed release (and auto-installs
+a newer match at activation). Set `WVM_VERBOSE=1` to print which runtime was
+selected.
 
 ## Application registration
 
 Applications can declare which Wasmtime version(s) they were tested against, so
 wvm knows whether a runtime is safe to remove and which apps are behind. An app
 owns a small manifest (the `[app]` section of its `wvm.toml`) that it reads
-itself — so it works with **no wvm installed** and may bring its own runtime:
+itself, so it works with **no wvm installed** and may bring its own runtime:
 
 ```toml
 [app]
@@ -179,7 +180,7 @@ wvm register ./my-app     # reads my-app/wvm.toml and records the dependency
 wvm apps                  # list registered apps and their runtimes
 ```
 
-Registration is **advisory bookkeeping** — apps never depend on wvm at runtime.
+Registration is **advisory bookkeeping**: apps never depend on wvm at runtime.
 With it, `wvm uninstall <version>` refuses to remove a runtime a registered app
 still needs (listing the dependents; `--force` overrides). An app that sets
 `runtime-path` is fully decoupled: it's recorded for visibility but pins no
@@ -194,14 +195,14 @@ calls `wasmtime` therefore routes through wvm, which:
 
 1. resolves the active version (pin → session → default, floating specs
    included, auto-installing a newer match if needed);
-2. records the full run to `usage.log` — the resolved **version** and runtime
+2. records the full run to `usage.log`: the resolved **version** and runtime
    **binary path**, the **module** run with its absolute path and **sha256**,
    the complete **argv** (flags and options), the **app** (`WVM_APP`), the
-   **caller**, the **cwd**, and the **time** — one cheap append, no database on
-   the hot path;
+   **caller**, the **cwd**, and the **time** (one cheap append, no database on
+   the hot path);
 3. execs the real runtime, forwarding all arguments.
 
-`wvm exec` records the same way. The app needs to know nothing about wvm — the
+`wvm exec` records the same way. The app needs to know nothing about wvm; the
 dependency arrow flips from app → wvm to wvm → (observing) → app. Set
 `WVM_APP=<name>` in an app's environment for a clean self-identification;
 otherwise the caller is best-effort (the parent process name where available).
@@ -228,9 +229,9 @@ wvm usage --limit 50
 The log is plain JSON Lines (`usage.log`), compacted on read. `wvm list`
 annotates installed runtimes with when they were last used and hints runtimes
 unused for a while (default 90 days, `WVM_STALE_DAYS` overrides) that are safe to
-consider removing — excluding the seed, the default, and any app-required
+consider removing, excluding the seed, the default, and any app-required
 version. Observation only covers runtimes reached through `PATH`; an app that
-hardcodes an absolute runtime path is invisible here — which is what
+hardcodes an absolute runtime path is invisible here, which is what
 registration is for.
 
 ## Storage layout
@@ -257,9 +258,42 @@ runtime version is a plain directory of extracted files:
   wvm-app.wasm                         # the app component
 ```
 
+## Environment variables
+
+| Variable | Purpose |
+| --- | --- |
+| `WVM_HOME` | wvm root directory (default `~/.tegmentum/wvm`). |
+| `WVM_VERSION` | Per-shell runtime override (set by `wvm use`). |
+| `WVM_VERBOSE` | `1` prints which runtime was selected and why. |
+| `WVM_REFRESH_INTERVAL` | Seconds to cache the remote release list (default `3600`; `0` stays offline). |
+| `WVM_STALE_DAYS` | Days before `wvm list` flags a runtime as unused (default `90`). |
+| `WVM_APP` | Application name recorded in usage for the current process. |
+| `WVM_NO_USAGE` | `1` skips usage recording (same as a leading `--no-usage`). |
+| `WVM_HASH_WARN_MB` | Module size (MiB) above which hashing warns (default `100`; `0` disables). |
+| `WASMTIME_HOME`, `WASM_RUNTIME_HOME` | External runtime location used as a discovery fallback. |
+| `HTTP_PROXY`, `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` | Proxy for downloads. Honored directly by the native seed/self-update paths and forwarded to the app for `wasi:http`. |
+
+## Uninstalling
+
+Everything wvm installs lives under one directory plus a couple of shell-rc
+lines. Remove the data directory (this also removes the `curl | sh` binary,
+which lives at `~/.tegmentum/wvm/bin/wvm`):
+
+```sh
+rm -rf ~/.tegmentum/wvm     # binary, runtimes, seed, shims, cache, logs
+```
+
+Homebrew users run `brew uninstall wvm` as well. Then delete the installer's
+lines from your shell rc files (`~/.zshrc`, `~/.bashrc`, and so on); they are tagged
+`# wvm-managed`:
+
+```sh
+grep -v '# wvm-managed' ~/.zshrc > ~/.zshrc.tmp && mv ~/.zshrc.tmp ~/.zshrc
+```
+
 ## Build from source
 
-Requires only the Rust `wasm32-wasip2` target — the native binary embeds the
+Requires only the Rust `wasm32-wasip2` target; the native binary embeds the
 wasm app component.
 
 ```sh
@@ -273,14 +307,15 @@ no network for WIT.
 
 ## Releasing
 
-For each platform, `cargo xtask build` produces `target/release/wvm`; publish it on the
-GitHub release as `wvm-<arch>-<os>` (e.g. `wvm-aarch64-macos`) alongside a
-matching `wvm-<arch>-<os>.sha256`. Then bump `version` and the per-platform
-`sha256` values in [`Formula/wvm.rb`](Formula/wvm.rb). The `install.sh` script
-and the Homebrew formula both consume those `wvm-<arch>-<os>` assets.
+Bump `version` in `Cargo.toml`, add a `CHANGELOG.md` entry, then push a `v*`
+tag. `.github/workflows/release.yml` builds the `wvm-<arch>-<os>` binaries plus
+`.sha256` for macOS and Linux (arm64 and x86_64) and publishes them to the
+GitHub release. Finish by filling the per-platform `sha256` values in
+[`Formula/wvm.rb`](Formula/wvm.rb) from the published assets. Both `install.sh`
+and the Homebrew formula consume those `wvm-<arch>-<os>` assets.
 
 [Wasmtime cuts an LTS](https://docs.wasmtime.dev/stability-release.html) every
-12 releases (major divisible by 12 — 24, 36, 48, …), supported 24 months; wvm
+12 releases (major divisible by 12: 24, 36, 48, ...), supported 24 months; wvm
 marks these in `wvm list` and resolves `wvm install lts` to the newest one.
 
 ## Claude Code plugin
