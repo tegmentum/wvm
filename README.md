@@ -81,7 +81,7 @@ for one line, or `wvm upgrade --all` to bump every installed major line.
 
 | Command | Description |
 | --- | --- |
-| `wvm install <spec>` | Install a runtime (spec: `latest`, `lts`, `24`, `24.0`, or `24.0.1`). `--default` to set it as default. |
+| `wvm install <spec>` | Install a runtime (spec: `latest`, `lts`, `24`, `24.0`, or `24.0.1`). `--default` to set it as default. `--from <archive>` installs offline from a local `.tar.xz` (version must be exact). |
 | `wvm list [--all]` | List all available versions; `lts`/installed/default/seed marked. `--all` includes prereleases. |
 | `wvm uninstall <spec>` | Remove an installed runtime (spec resolves to the newest installed match; `--force` past app deps; the seed cannot be removed). |
 | `wvm register <app-dir>` | Record an app's runtime dependency from its `wvm.toml` `[app]`. |
@@ -97,6 +97,9 @@ for one line, or `wvm upgrade --all` to bump every installed major line.
 | `wvm path [version]` | Print a runtime's filesystem path. |
 | `wvm exec [--no-usage] -- <args>` | Run the selected runtime, forwarding arguments (`--no-usage` skips recording). |
 | `wvm verify [version]` | Validate installation integrity against manifests. |
+| `wvm doctor` | Diagnose the install: WVM_HOME, seed, shim/PATH, shell hook, default — and list externally-installed wasmtimes. |
+| `wvm seed status` | Show the seed runtime version and whether a newer Wasmtime is available. |
+| `wvm seed upgrade [--check]` | Update the protected seed runtime to the latest Wasmtime. |
 
 ## Architecture
 

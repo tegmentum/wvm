@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`wvm doctor`** — diagnose the install: WVM_HOME, the seed, the shim and
+  PATH (including whether an external wasmtime shadows the shim), the shell
+  hook, and default resolution. Also lists externally-installed wasmtimes
+  (Homebrew/cargo/system) that wvm can fall back to but does not manage.
+- **`wvm seed status` / `wvm seed upgrade [--check]`** — update the protected
+  seed runtime, which was previously downloaded once and locked forever, so a
+  Wasmtime fix in the runtime that runs everything is remediable.
+- **`wvm install <version> --from <archive>`** — install offline from a local
+  `.tar.xz` (air-gapped / CI); the version must be exact.
+- Proxy support: native downloads (seed, self-update) honor
+  `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`, and proxy env is forwarded to the app.
+- Integration tests for the file-based storage and discovery (21 tests total).
+
+### Changed
+
+- The name is **Wasmtime Version Manager** (it manages Wasmtime specifically),
+  not "WebAssembly Version Manager".
+
 ## 0.4.0
 
 Radically simpler storage: the content-addressable store and SQLite index are

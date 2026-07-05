@@ -24,6 +24,8 @@ const COMMANDS: &[(&str, &str)] = &[
     ("usage", "Show runtime invocations"),
     ("uninstall", "Remove an installed runtime"),
     ("verify", "Validate installation integrity"),
+    ("doctor", "Diagnose install, PATH, and shell integration"),
+    ("seed", "Inspect or update the seed runtime"),
     ("completions", "Print a shell completion script"),
     ("help", "Show help"),
 ];
