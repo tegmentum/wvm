@@ -143,4 +143,6 @@ fn print_help() {
     println!(
         "  --upgrade [--check]  Update wvm itself to the latest release (--check only reports)"
     );
+    println!("  seed status          Show the seed runtime version (and if an update exists)");
+    println!("  seed upgrade [--check]  Update the protected seed runtime to the latest Wasmtime");
 }

@@ -96,6 +96,19 @@ fn run() -> Result<()> {
         return exec_runtime(&layout, &args[1..]);
     }
 
+    // `seed` — inspect or update the protected seed runtime. Native: the seed is
+    // what runs the app, so it must be managed without the app.
+    if args.first().map(String::as_str) == Some("seed") {
+        return match args.get(1).map(String::as_str) {
+            Some("upgrade") => seed::upgrade(&layout, args.iter().any(|a| a == "--check")),
+            Some("status") | None => seed::status(&layout),
+            Some(other) => {
+                eprintln!("unknown seed subcommand '{other}' (try: status, upgrade [--check])");
+                std::process::exit(2);
+            }
+        };
+    }
+
     // Throttled, best-effort check for a newer wvm release. Only on ordinary
     // management commands — never the `exec` hot path above — and never fatal.
     selfupdate::notify(&layout);
