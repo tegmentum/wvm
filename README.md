@@ -243,13 +243,6 @@ runtime version is a plain directory of extracted files:
   wvm-app.wasm                         # the app component
 ```
 
-The protected **seed** runtime lives in `seed/`, separate from user-managed
-versions; WVM never lists or deletes it. There is **no database and no shared
-object store** — each version's files stand alone. (Wasmtime ships ~4 files per
-version and its binary changes every release, so content-addressed dedup across
-versions saved essentially nothing.) The per-version `manifest.json` records file
-digests so `wvm verify` can check integrity.
-
 ## Build from source
 
 Requires only the Rust `wasm32-wasip2` target — the native binary embeds the
