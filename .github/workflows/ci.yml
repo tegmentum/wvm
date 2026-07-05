@@ -11,7 +11,7 @@ permissions:
 jobs:
   build:
     # Only run on GitHub while the repo is public. Private → skipped (iterate
-    # locally with `make act`, which sees no repository payload and still runs);
+    # locally with `cargo xtask act`, which sees no repository payload and runs);
     # flipping the repo public makes this run automatically, no edits needed.
     if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-latest
@@ -31,7 +31,7 @@ jobs:
         run: cargo fmt --all --check
 
       - name: Build (app -> native)
-        run: make
+        run: cargo xtask build
 
       - name: Clippy (native crates)
         run: cargo clippy -p wvm-core -p wvm --release -- -D warnings

@@ -34,7 +34,7 @@ jobs:
           targets: wasm32-wasip2
 
       - name: Build
-        run: make
+        run: cargo xtask build
 
       - name: Package wvm-${{ matrix.label }}
         run: |
