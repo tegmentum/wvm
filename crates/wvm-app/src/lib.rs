@@ -33,9 +33,13 @@ impl exports::wasi::cli::run::Guest for Component {
         let flag = |name: &str| args.iter().skip(2).any(|a| a == name);
 
         let result = match cmd {
-            "install" => match positional {
-                Some(v) => install::install(v, flag("--default") || flag("--use")),
-                None => missing_arg("install <version>"),
+            "install" => match (positional, flag_str(&args, "--from")) {
+                // `install <version> --from <archive>` installs from a local file.
+                (Some(v), Some(from)) => {
+                    install::install_from(v, &from, flag("--default") || flag("--use"))
+                }
+                (Some(v), None) => install::install(v, flag("--default") || flag("--use")),
+                (None, _) => missing_arg("install <version>"),
             },
             // Internal: resolve a spec and auto-install the newest match if
             // missing. Invoked by the bootstrapper before `exec` for floating
@@ -103,6 +107,20 @@ fn missing_arg(usage: &str) -> anyhow::Result<()> {
     anyhow::bail!("usage: wvm {usage}")
 }
 
+/// Parse a string option in either `--name VALUE` or `--name=VALUE` form.
+fn flag_str(args: &[String], name: &str) -> Option<String> {
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        if a == name {
+            return it.next().cloned();
+        }
+        if let Some(rest) = a.strip_prefix(name).and_then(|r| r.strip_prefix('=')) {
+            return Some(rest.to_string());
+        }
+    }
+    None
+}
+
 /// Parse an integer option in either `--name N` or `--name=N` form.
 fn flag_value(args: &[String], name: &str) -> Option<i64> {
     let mut it = args.iter();
@@ -122,6 +140,7 @@ fn print_help() {
     println!();
     println!("Commands:");
     println!("  install <spec>       Install a runtime (spec: latest, lts, 24, 24.0, or 24.0.1)");
+    println!("    install <ver> --from <archive>   Install offline from a local .tar.xz");
     println!("  list [--all]         List all available versions (installed ones marked)");
     println!("  current              Show the effective runtime version (session or default)");
     println!("  path [spec]          Print a runtime's filesystem path");

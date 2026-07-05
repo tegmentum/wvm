@@ -7,6 +7,7 @@ use crate::progress::Spinner;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use std::cmp::Ordering;
+use std::path::Path;
 use wvm_core::http::Http;
 use wvm_core::layout::{Layout, WASMTIME};
 use wvm_core::manifest::{mode_string, FileEntry, Manifest};
@@ -227,8 +228,67 @@ fn install_inner(version_arg: &str, make_default: bool, auto_default: bool) -> R
         None => eprintln!("warning: no published checksum for {asset_name}"),
     }
 
+    let count = materialize_install(&layout, &version, &platform, &download_path, archive_sha256)?;
+    let _ = std::fs::remove_file(&download_path);
+    println!("Installed wasmtime {version} ({count} files)");
+
+    // The first runtime installed becomes the default; otherwise honor
+    // --default/--use.
+    if make_default || (auto_default && discovery::default_version(&layout).is_none()) {
+        store_default_spec(&layout, version_arg, &version)?;
+    }
+    Ok(())
+}
+
+/// `wvm install <version> --from <archive>` — install from a local wasmtime
+/// `.tar.xz` without any network. The version must be exact (there is nothing to
+/// resolve a spec against offline); the archive must match this host.
+pub fn install_from(version_arg: &str, archive: &str, make_default: bool) -> Result<()> {
+    let layout = Layout::discover()?;
+    layout.ensure_base()?;
+    let platform = Platform::detect()?;
+
+    let version = match VersionSpec::parse(version_arg).map_err(|e| anyhow!(e))? {
+        VersionSpec::Exact(v) => v,
+        _ => bail!(
+            "install --from requires an exact version, e.g. `wvm install 25.0.0 --from <archive>`"
+        ),
+    };
+    if is_installed(&layout, &version) {
+        println!("wasmtime {version} is already installed");
+        if make_default {
+            store_default_spec(&layout, version_arg, &version)?;
+        }
+        return Ok(());
+    }
+
+    let archive_path = Path::new(archive);
+    if !archive_path.is_file() {
+        bail!("archive not found: {archive}");
+    }
+    let archive_sha256 = hash::sha256_file(archive_path)?;
+    let count = materialize_install(&layout, &version, &platform, archive_path, archive_sha256)?;
+    println!("Installed wasmtime {version} from {archive} ({count} files)");
+
+    if make_default || discovery::default_version(&layout).is_none() {
+        store_default_spec(&layout, version_arg, &version)?;
+    }
+    Ok(())
+}
+
+/// Extract `archive_path` into the version directory, record each file's digest
+/// in `manifest.json`, and publish it atomically. Returns the file count. The
+/// exec bit is not set here — the app is wasm/non-unix; the native bootstrapper
+/// restores it at run time. Does not delete the archive.
+fn materialize_install(
+    layout: &Layout,
+    version: &str,
+    platform: &Platform,
+    archive_path: &Path,
+    archive_sha256: String,
+) -> Result<usize> {
     let extract = Spinner::new("Extracting archive");
-    let files = archive::extract_tar_xz(&download_path)?;
+    let files = archive::extract_tar_xz(archive_path)?;
     extract.finish(&format!("Extracted {} files", files.len()));
 
     let staging = layout
@@ -243,9 +303,6 @@ fn install_inner(version_arg: &str, make_default: bool, auto_default: bool) -> R
     let mut entries = Vec::new();
     let mut store_sp = Spinner::new("Writing files");
     for (i, f) in files.iter().enumerate() {
-        // Write the extracted bytes straight into the version directory. The
-        // exec bit is not set here — the app is wasm/non-unix; the native
-        // bootstrapper restores it at run time.
         let dest = staging.join(&f.logical_path);
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)
@@ -264,29 +321,20 @@ fn install_inner(version_arg: &str, make_default: bool, auto_default: bool) -> R
 
     let manifest = Manifest {
         runtime: WASMTIME.to_string(),
-        version: version.clone(),
+        version: version.to_string(),
         platform: platform.label(),
         archive_sha256,
         files: entries,
     };
     manifest.write(&staging.join("manifest.json"))?;
 
-    let final_dir = layout.version_dir(WASMTIME, &version);
+    let final_dir = layout.version_dir(WASMTIME, version);
     if final_dir.exists() {
         let _ = std::fs::remove_dir_all(&final_dir);
     }
     std::fs::rename(&staging, &final_dir)
         .with_context(|| format!("publishing {}", final_dir.display()))?;
-    let _ = std::fs::remove_file(&download_path);
-
-    println!("Installed wasmtime {version} ({} files)", files.len());
-
-    // The first runtime installed becomes the default; otherwise honor
-    // --default/--use.
-    if make_default || (auto_default && discovery::default_version(&layout).is_none()) {
-        store_default_spec(&layout, version_arg, &version)?;
-    }
-    Ok(())
+    Ok(files.len())
 }
 
 fn is_installed(layout: &Layout, version: &str) -> bool {

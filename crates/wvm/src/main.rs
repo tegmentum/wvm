@@ -122,7 +122,7 @@ fn run() -> Result<()> {
 
     // `register <app-dir>` reads a manifest outside WVM_HOME; preopen that
     // directory for the app and pass it the canonical absolute path.
-    let extra_dir = register_dir(&mut args);
+    let extra_dir = register_dir(&mut args).or_else(|| install_from_dir(&mut args));
 
     materialize_app(&layout)?;
     let _seed_version = ensure_seed(&layout)?;
@@ -158,6 +158,30 @@ fn register_dir(args: &mut [String]) -> Option<std::path::PathBuf> {
     let abs = std::fs::canonicalize(&args[idx]).ok()?;
     args[idx] = abs.to_string_lossy().into_owned();
     Some(abs)
+}
+
+/// For `install <version> --from <archive>`, canonicalize the archive path
+/// (rewriting the arg in place) and return its parent directory so the
+/// bootstrapper can preopen it for the sandboxed app.
+fn install_from_dir(args: &mut [String]) -> Option<std::path::PathBuf> {
+    if args.first().map(String::as_str) != Some("install") {
+        return None;
+    }
+    for i in 0..args.len() {
+        if args[i] == "--from" {
+            let abs = std::fs::canonicalize(args.get(i + 1)?).ok()?;
+            let dir = abs.parent()?.to_path_buf();
+            args[i + 1] = abs.to_string_lossy().into_owned();
+            return Some(dir);
+        }
+        if let Some(val) = args[i].strip_prefix("--from=") {
+            let abs = std::fs::canonicalize(val).ok()?;
+            let dir = abs.parent()?.to_path_buf();
+            args[i] = format!("--from={}", abs.to_string_lossy());
+            return Some(dir);
+        }
+    }
+    None
 }
 
 /// `wvm exec [--no-usage] [--] <args>` — resolve the user's selected runtime and
@@ -380,6 +404,22 @@ fn app_command(layout: &Layout, args: &[String], extra_dir: Option<&Path>) -> Re
     }
     if let Ok(v) = std::env::var("WVM_STALE_DAYS") {
         cmd.arg("--env").arg(format!("WVM_STALE_DAYS={v}"));
+    }
+    // Forward proxy settings so the app's wasi:http downloads can honor them
+    // where the host runtime supports it.
+    for var in [
+        "HTTP_PROXY",
+        "HTTPS_PROXY",
+        "ALL_PROXY",
+        "NO_PROXY",
+        "http_proxy",
+        "https_proxy",
+        "all_proxy",
+        "no_proxy",
+    ] {
+        if let Ok(v) = std::env::var(var) {
+            cmd.arg("--env").arg(format!("{var}={v}"));
+        }
     }
     // Forward the per-session override so the app reflects it in
     // list/current and resolution.
