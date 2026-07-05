@@ -1,6 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.4.0
+
+Radically simpler storage: the content-addressable store and SQLite index are
+gone, replaced by plain files, and the build is now plain cargo.
 
 ### Changed
 

@@ -12,7 +12,7 @@
 class Wvm < Formula
   desc "WebAssembly Version Manager — installs and manages Wasmtime runtimes"
   homepage "https://github.com/tegmentum/wvm"
-  version "0.3.0"
+  version "0.4.0"
   license "Apache-2.0"
 
   on_macos do
