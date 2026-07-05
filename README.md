@@ -35,9 +35,6 @@ wvm default latest      # default runtime for new shells
 wvm exec -- --version   # run the selected runtime
 ```
 
-Long operations show a progress bar / spinner on stderr when attached to a
-terminal, and fall back to plain milestone lines when output is piped.
-
 ## Default vs. per-shell version
 
 - `wvm default <version>` sets the **persistent default** used by new shells.
