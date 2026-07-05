@@ -1,0 +1,10 @@
+{
+  "name": "wvm",
+  "description": "Use wvm, the WebAssembly Version Manager, to install, pin, switch, run, and manage versioned Wasmtime runtimes.",
+  "version": "0.3.0",
+  "author": { "name": "Tegmentum" },
+  "homepage": "https://github.com/tegmentum/wvm",
+  "repository": "https://github.com/tegmentum/wvm",
+  "license": "Apache-2.0",
+  "keywords": ["wasm", "webassembly", "wasmtime", "version-manager", "runtime"]
+}

@@ -307,6 +307,21 @@ truthy and the job runs. It needs a running Docker daemon (e.g.
 [Colima](https://github.com/abiosoft/colima): `colima start`). On Apple Silicon,
 `.actrc` pins `linux/amd64` to match GitHub-hosted runners.
 
+## Claude Code plugin
+
+This repo doubles as a Claude Code plugin marketplace, so the wvm usage guidance
+is available in **any** project (not just a clone of this repo):
+
+```
+/plugin marketplace add tegmentum/wvm
+/plugin install wvm@tegmentum
+```
+
+The plugin ships a skill that teaches Claude how to install, pin, switch, run,
+and manage runtimes with wvm. Contributors working inside this repo get the same
+skill automatically via the project-level `.claude/skills/wvm/` (a symlink to the
+plugin's canonical copy, so the two never drift).
+
 ## License
 
 Apache-2.0.

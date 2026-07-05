@@ -1,0 +1,11 @@
+{
+  "name": "tegmentum",
+  "owner": { "name": "Tegmentum" },
+  "plugins": [
+    {
+      "name": "wvm",
+      "source": "./plugins/wvm",
+      "description": "Use wvm to install, pin, switch, run, and manage versioned Wasmtime runtimes."
+    }
+  ]
+}
