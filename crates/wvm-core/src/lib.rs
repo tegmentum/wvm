@@ -18,6 +18,7 @@ pub mod layout;
 pub mod manifest;
 pub mod materialize;
 pub mod platform;
+pub mod shell;
 pub mod spec;
 pub mod store;
 pub mod usage;

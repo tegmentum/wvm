@@ -5,7 +5,9 @@
 //! runs the app on the seed runtime — forwarding all arguments. All real WVM
 //! logic lives in the app (`wvm-app`), executed as a WebAssembly component.
 
+mod completions;
 mod seed;
+mod selfupdate;
 mod shim;
 
 use anyhow::{bail, Context, Result};
@@ -53,6 +55,32 @@ fn run() -> Result<()> {
         return Ok(());
     }
 
+    // Self-upgrade the wvm binary in place. Handled natively (like --version):
+    // it replaces this executable, so it must not depend on the seed runtime.
+    // Distinct from `wvm upgrade <spec>`, which upgrades managed runtimes.
+    if args.first().map(String::as_str) == Some("--upgrade") {
+        let check_only = args.iter().any(|a| a == "--check");
+        return selfupdate::run(check_only);
+    }
+
+    // Emit a shell completion script. Native (no runtime needed) so the
+    // installer can generate completions right after placing the binary.
+    if args.first().map(String::as_str) == Some("completions") {
+        // Hidden helper the generated scripts call for dynamic version lists.
+        if args.get(1).map(String::as_str) == Some("--installed") {
+            return completions::installed();
+        }
+        return completions::print(args.get(1).map(String::as_str));
+    }
+
+    // Print the shell integration natively (no runtime needed), so the
+    // installer can fold it into the sourced env file offline.
+    if args.first().map(String::as_str) == Some("shell-init") {
+        let layout = Layout::discover()?;
+        print!("{}", wvm_core::shell::integration(&layout.shims_dir()));
+        return Ok(());
+    }
+
     let layout = Layout::discover()?;
     std::fs::create_dir_all(&layout.root)
         .with_context(|| format!("creating {}", layout.root.display()))?;
@@ -68,14 +96,36 @@ fn run() -> Result<()> {
         return exec_runtime(&layout, &args[1..]);
     }
 
+    // Throttled, best-effort check for a newer wvm release. Only on ordinary
+    // management commands — never the `exec` hot path above — and never fatal.
+    selfupdate::notify(&layout);
+
     // `register <app-dir>` reads a manifest outside WVM_HOME; preopen that
     // directory for the app and pass it the canonical absolute path.
     let extra_dir = register_dir(&mut args);
 
     materialize_app(&layout)?;
-    let _seed_version = seed::ensure(&layout)?;
+    let _seed_version = ensure_seed(&layout)?;
 
     launch_app(&layout, &args, extra_dir.as_deref())
+}
+
+/// Ensure the protected seed runtime exists, and on the very first bootstrap
+/// adopt its version as the initial persistent default. This makes `wvm exec`
+/// work out of the box: the seed Wasmtime is downloaded anyway to run the app,
+/// so a fresh install has a usable runtime without a separate `wvm install` +
+/// `wvm default`. Only sets the default when none exists, so a user's later
+/// choice is never overwritten.
+fn ensure_seed(layout: &Layout) -> Result<String> {
+    let version = seed::ensure(layout)?;
+    if wvm_core::discovery::default_version(layout).is_none() {
+        if let Err(e) = wvm_core::discovery::set_default_version(layout, &version) {
+            if std::env::var_os("WVM_VERBOSE").is_some() {
+                eprintln!("wvm: could not set seed as initial default: {e:#}");
+            }
+        }
+    }
+    Ok(version)
 }
 
 /// For `register <dir>`, canonicalize the directory argument (rewriting it in
@@ -166,6 +216,14 @@ fn ensure_active_runtime(layout: &Layout, cwd: &Path) -> Result<()> {
         if installed_best.is_some() {
             return Ok(());
         }
+        // The protected seed runtime may already provide this exact version
+        // (the initial default adopted at first bootstrap points at it), so
+        // don't download a redundant managed copy — `resolve` will run the seed.
+        if let Some((seed_ver, _)) = discovery::seed_runtime(layout) {
+            if spec.resolve(std::slice::from_ref(&seed_ver)) == Some(seed_ver.as_str()) {
+                return Ok(());
+            }
+        }
         return delegate_ensure(layout, &spec_str);
     }
 
@@ -191,7 +249,7 @@ fn ensure_active_runtime(layout: &Layout, cwd: &Path) -> Result<()> {
 /// Run the app's `ensure <spec>` step (materializing the app + seed first).
 fn delegate_ensure(layout: &Layout, spec_str: &str) -> Result<()> {
     materialize_app(layout)?;
-    seed::ensure(layout)?;
+    ensure_seed(layout)?;
     let args = ["ensure".to_string(), spec_str.to_string()];
     let status = run_app_and_wait(layout, &args)?;
     if !status.success() && std::env::var_os("WVM_VERBOSE").is_some() {
@@ -291,6 +349,11 @@ fn app_command(layout: &Layout, args: &[String], extra_dir: Option<&Path>) -> Re
     }
     if let Ok(v) = std::env::var("WVM_VERBOSE") {
         cmd.arg("--env").arg(format!("WVM_VERBOSE={v}"));
+    }
+    // The user's login shell, so `wvm use`/`shell-init` can name the right rc
+    // file (e.g. ~/.bashrc vs ~/.zshrc) in their guidance.
+    if let Ok(v) = std::env::var("SHELL") {
+        cmd.arg("--env").arg(format!("SHELL={v}"));
     }
     if let Ok(v) = std::env::var("WVM_REFRESH_INTERVAL") {
         cmd.arg("--env").arg(format!("WVM_REFRESH_INTERVAL={v}"));

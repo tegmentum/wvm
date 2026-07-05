@@ -13,6 +13,23 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
 
+/// An `[app]` manifest discovered at (or above) an invocation's working
+/// directory. Carried on a [`UsageEntry`] so the app can auto-register the
+/// application when it ingests the log — no manual `wvm register` needed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppRef {
+    /// Application name from the manifest's `[app]` section.
+    pub name: String,
+    /// Directory containing the `wvm.toml` (the app's root).
+    pub dir: String,
+    /// Declared wvm-managed runtimes the app depends on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtimes: Vec<String>,
+    /// Optional custom runtime the app supplies itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub runtime_path: Option<String>,
+}
+
 /// One recorded runtime invocation, capturing the full context of the run.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UsageEntry {
@@ -44,6 +61,9 @@ pub struct UsageEntry {
     /// `sha256` of the module bytes, if a module file was identified.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub module_sha256: Option<String>,
+    /// `[app]` manifest discovered at/above the cwd, for auto-registration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub manifest: Option<AppRef>,
     /// Unix timestamp (seconds).
     pub invoked_at: i64,
 }

@@ -111,7 +111,34 @@ pub fn ingest_usage_log<I: Index>(index: &mut I, layout: &Layout) -> Result<usiz
         return Ok(0);
     }
     index.record_usage(&entries)?;
+    auto_register(index, &entries);
     Ok(entries.len())
+}
+
+/// Auto-register apps observed running from a directory with an `[app]`
+/// manifest, so `uninstall` gating and `wvm apps` work without a manual
+/// `wvm register`. Latest observation per app wins; entirely best-effort —
+/// a failed registration never fails the ingest.
+fn auto_register<I: Index>(index: &mut I, entries: &[UsageEntry]) {
+    use std::collections::HashMap;
+    let mut latest: HashMap<&str, (&crate::usage::AppRef, i64)> = HashMap::new();
+    for e in entries {
+        if let Some(m) = &e.manifest {
+            let slot = latest.entry(m.name.as_str()).or_insert((m, e.invoked_at));
+            if e.invoked_at >= slot.1 {
+                *slot = (m, e.invoked_at);
+            }
+        }
+    }
+    for (name, (m, ts)) in latest {
+        let _ = index.register_app(
+            name,
+            Some(m.dir.as_str()),
+            m.runtime_path.as_deref(),
+            &m.runtimes,
+            ts,
+        );
+    }
 }
 
 /// Rebuild the index from the authoritative on-disk state: every object file in

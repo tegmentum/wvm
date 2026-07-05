@@ -145,4 +145,11 @@ fn print_help() {
     println!("  verify [version]     Validate installation integrity");
     println!("  gc [--prune]         Report/reclaim unreferenced store objects");
     println!("  objects              List stored objects and their backlinks");
+    println!("  completions <shell>  Print a completion script (bash, zsh, fish)");
+    println!();
+    println!("Self-management:");
+    println!("  --version, -V        Print the wvm version");
+    println!(
+        "  --upgrade [--check]  Update wvm itself to the latest release (--check only reports)"
+    );
 }

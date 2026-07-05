@@ -84,9 +84,29 @@ pub(crate) fn record_invocation(
         module,
         module_path,
         module_sha256,
+        manifest: discover_app(cwd),
         invoked_at: now_epoch(),
     };
     let _ = usage::record(layout, &entry);
+}
+
+/// Discover an `[app]` manifest at or above `cwd`, so the app can auto-register
+/// the application on ingest (no manual `wvm register`). Best-effort: stops at
+/// the nearest `wvm.toml`; returns `None` when it has no `[app]` section.
+fn discover_app(cwd: Option<&Path>) -> Option<wvm_core::usage::AppRef> {
+    let mut dir = cwd?;
+    loop {
+        if dir.join(wvm_core::discovery::PIN_FILE).is_file() {
+            let m = wvm_core::appmanifest::AppManifest::read_dir(dir).ok()?;
+            return Some(wvm_core::usage::AppRef {
+                name: m.name,
+                dir: dir.display().to_string(),
+                runtimes: m.runtimes,
+                runtime_path: m.runtime_path,
+            });
+        }
+        dir = dir.parent()?;
+    }
 }
 
 /// Hash a module's bytes for the usage record, warning interactively before a

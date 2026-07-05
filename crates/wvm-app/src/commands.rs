@@ -99,6 +99,9 @@ pub fn list(all: bool) -> Result<()> {
         }
     }
     println!("Wasmtime runtimes  (* current; tags: lts, installed, default, seed)");
+    // Pad the version column to the widest entry so the tab lands on a
+    // consistent stop and the `[tags]` line up down the list.
+    let width = versions.iter().map(String::len).max().unwrap_or(0);
     for v in &versions {
         let is_current = effective.as_ref().map(|(e, _)| e == v).unwrap_or(false);
         let marker = if is_current { "*" } else { " " };
@@ -118,7 +121,7 @@ pub fn list(all: bool) -> Result<()> {
         let suffix = if tags.is_empty() {
             String::new()
         } else {
-            format!("  [{}]", tags.join(", "))
+            format!("\t[{}]", tags.join(", "))
         };
         let usage_note = match usage_map.get(v.as_str()) {
             Some(&t) if installed_set.contains(v.as_str()) => {
@@ -126,7 +129,7 @@ pub fn list(all: bool) -> Result<()> {
             }
             _ => String::new(),
         };
-        println!("{marker} {v}{suffix}{usage_note}");
+        println!("{marker} {v:<width$}{suffix}{usage_note}");
     }
     if offline {
         eprintln!("(offline: only installed versions shown)");
@@ -136,30 +139,30 @@ pub fn list(all: bool) -> Result<()> {
 
 pub fn current() -> Result<()> {
     let layout = Layout::discover()?;
-    match discovery::effective_spec(&layout) {
-        Some((spec_str, source)) => match discovery::resolve_installed(&layout, &spec_str) {
-            Some(v) => {
-                // stdout stays just the concrete version (script-friendly).
-                println!("{v}");
-                let floating = VersionSpec::parse(&spec_str)
-                    .map(|s| s.is_floating())
-                    .unwrap_or(false);
-                if floating {
-                    eprintln!("(resolved from '{spec_str}')");
-                }
-                if std::env::var_os("WVM_VERBOSE").is_some() {
-                    eprintln!("(via {source})");
-                }
+    let Some((spec_str, source)) = discovery::effective_spec(&layout) else {
+        eprintln!("no default runtime set (use `wvm default <version>`)");
+        std::process::exit(1);
+    };
+    // `effective_version` resolves against the managed store and falls back to
+    // the protected seed runtime when its version satisfies the spec.
+    match discovery::effective_version(&layout) {
+        Some((v, _)) => {
+            // stdout stays just the concrete version (script-friendly).
+            println!("{v}");
+            let floating = VersionSpec::parse(&spec_str)
+                .map(|s| s.is_floating())
+                .unwrap_or(false);
+            if floating {
+                eprintln!("(resolved from '{spec_str}')");
             }
-            None => {
-                eprintln!(
-                    "selected '{spec_str}' but no matching version is installed; run `wvm install {spec_str}`"
-                );
-                std::process::exit(1);
+            if std::env::var_os("WVM_VERBOSE").is_some() {
+                eprintln!("(via {source})");
             }
-        },
+        }
         None => {
-            eprintln!("no default runtime set (use `wvm default <version>`)");
+            eprintln!(
+                "selected '{spec_str}' but no matching version is installed; run `wvm install {spec_str}`"
+            );
             std::process::exit(1);
         }
     }
@@ -260,6 +263,19 @@ fn upgrade_one(layout: &Layout, spec_str: &str) -> Result<()> {
     Ok(())
 }
 
+/// The startup file to suggest for shell integration, based on the user's login
+/// shell (`$SHELL`, forwarded by the native bootstrapper). Falls back to a
+/// generic phrasing when the shell is unknown.
+fn shell_rc_file() -> &'static str {
+    let shell = std::env::var("SHELL").unwrap_or_default();
+    match shell.rsplit('/').next().unwrap_or("") {
+        "bash" => "~/.bashrc",
+        "zsh" => "~/.zshrc",
+        "fish" => "~/.config/fish/config.fish",
+        _ => "your shell startup file (e.g. ~/.bashrc)",
+    }
+}
+
 /// `wvm use <version>` — switch the runtime for the **current shell only**.
 ///
 /// A binary cannot change its parent shell's environment, so when run under the
@@ -276,7 +292,10 @@ pub fn use_version(spec_arg: &str) -> Result<()> {
         eprintln!(
             "`wvm use` switches the runtime for the current shell, which needs the shell hook:"
         );
-        eprintln!("    wvm shell-init >> ~/.zshrc   # once, then restart your shell");
+        eprintln!(
+            "    wvm shell-init >> {}   # once, then restart your shell",
+            shell_rc_file()
+        );
         eprintln!("Then `wvm use {spec}` applies to this shell. For the persistent default: `wvm default {spec}`.");
     } else {
         // Store the spec (not the resolved version) so the session floats too.
@@ -309,27 +328,13 @@ pub fn deactivate() -> Result<()> {
 /// apps that call `wasmtime` route through wvm) and define the `use` hook.
 pub fn shell_init() -> Result<()> {
     let layout = Layout::discover()?;
-    let shims = layout.shims_dir();
-    println!("# wvm shell integration — add to ~/.zshrc or ~/.bashrc");
-    println!("# Put the wvm shim ahead of PATH so `wasmtime` routes through wvm");
-    println!("# (resolves the active version and records usage transparently).");
-    println!("export PATH=\"{}:$PATH\"", shims.display());
-    print!("{SHELL_HOOK}");
+    println!(
+        "# Add to {} (or let the installer wire it for you).",
+        shell_rc_file()
+    );
+    print!("{}", wvm_core::shell::integration(&layout.shims_dir()));
     Ok(())
 }
-
-const SHELL_HOOK: &str = r#"wvm() {
-  case "$1" in
-    use|deactivate)
-      local __wvm_out
-      __wvm_out="$(command wvm "$@")" || return $?
-      [ -n "$__wvm_out" ] && eval "$__wvm_out"
-      ;;
-    *)
-      command wvm "$@" ;;
-  esac
-}
-"#;
 
 pub fn uninstall(version_arg: &str, force: bool) -> Result<()> {
     let layout = Layout::discover()?;
@@ -624,48 +629,110 @@ pub fn usage(limit: i64) -> Result<()> {
     }
 
     let now = now_epoch();
-    println!("Runtime usage (observed via the shim):");
-    for u in &by_version {
-        println!(
-            "  {:<10} {:>6} run(s), last {}",
-            u.version,
-            u.count,
-            humanize_ago(now, u.last_used)
-        );
-    }
+    // Usage is recorded to a single global log, so this aggregates every shell
+    // and `wvm exec` on the machine — not just the current shell.
+    println!("Runtime usage — recorded globally (all shells + `wvm exec`) via the shim.");
+    println!();
 
+    // Per-version rollup.
+    let mut rollup: Vec<Vec<String>> = Vec::new();
+    for u in &by_version {
+        rollup.push(vec![
+            u.version.clone(),
+            u.count.to_string(),
+            humanize_ago(now, u.last_used),
+        ]);
+    }
+    print_table(
+        &["VERSION", "RUNS", "LAST USED"],
+        &rollup,
+        &[Align::Left, Align::Right, Align::Left],
+    );
+
+    // Recent invocations, one row each.
     let recent = index.recent_usage(limit)?;
     if !recent.is_empty() {
-        println!("\nRecent invocations:");
+        println!();
+        println!("Recent invocations (newest first):");
+        println!();
+        let mut rows: Vec<Vec<String>> = Vec::new();
         for e in &recent {
             let who = e.app.as_deref().or(e.caller.as_deref()).unwrap_or("?");
-            println!(
-                "  {} · {} · {}",
-                e.version,
-                who,
-                humanize_ago(now, e.invoked_at)
-            );
-            if let Some(m) = &e.module {
-                let base = Path::new(m)
-                    .file_name()
-                    .and_then(|s| s.to_str())
-                    .unwrap_or(m);
-                let sha = e
-                    .module_sha256
-                    .as_deref()
-                    .map(|s| &s[..s.len().min(12)])
-                    .unwrap_or("-");
-                println!("      module  {base} ({sha})");
-            }
-            if !e.args.is_empty() {
-                println!("      args    {}", e.args.join(" "));
-            }
-            if let Some(cwd) = &e.cwd {
-                println!("      cwd     {cwd}");
-            }
+            let module = e
+                .module
+                .as_deref()
+                .map(|m| {
+                    Path::new(m)
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(m)
+                        .to_string()
+                })
+                .unwrap_or_else(|| "-".to_string());
+            rows.push(vec![
+                humanize_ago(now, e.invoked_at),
+                e.version.clone(),
+                who.to_string(),
+                module,
+                e.cwd.clone().unwrap_or_else(|| "-".to_string()),
+            ]);
         }
+        print_table(
+            &["WHEN", "VERSION", "WHO", "MODULE", "CWD"],
+            &rows,
+            &[
+                Align::Left,
+                Align::Left,
+                Align::Left,
+                Align::Left,
+                Align::Left,
+            ],
+        );
     }
     Ok(())
+}
+
+/// Column alignment for [`print_table`].
+enum Align {
+    Left,
+    Right,
+}
+
+/// Print a simple aligned text table (two-space gutters, a header row, no
+/// borders). The final column is never right-padded, so lines carry no trailing
+/// whitespace. Widths assume ASCII content (versions, paths, timestamps).
+fn print_table(headers: &[&str], rows: &[Vec<String>], aligns: &[Align]) {
+    let ncol = headers.len();
+    let mut width = vec![0usize; ncol];
+    for (i, h) in headers.iter().enumerate() {
+        width[i] = h.len();
+    }
+    for row in rows {
+        for (i, cell) in row.iter().enumerate().take(ncol) {
+            width[i] = width[i].max(cell.len());
+        }
+    }
+    let render = |cells: &[String]| -> String {
+        let mut line = String::from("  ");
+        for (i, &w) in width.iter().enumerate() {
+            let cell = cells.get(i).map(String::as_str).unwrap_or("");
+            let last = i + 1 == ncol;
+            match aligns.get(i).unwrap_or(&Align::Left) {
+                Align::Right => line.push_str(&format!("{cell:>w$}")),
+                Align::Left if last => line.push_str(cell),
+                Align::Left => line.push_str(&format!("{cell:<w$}")),
+            }
+            if !last {
+                line.push_str("  ");
+            }
+        }
+        line
+    };
+    let header_cells: Vec<String> = headers.iter().map(|s| s.to_string()).collect();
+    println!("{}", render(&header_cells));
+    for row in rows {
+        println!("{}", render(row));
+    }
 }
 
 /// Render `then` as a coarse "… ago" relative to `now`.
@@ -689,7 +756,11 @@ pub fn apps() -> Result<()> {
     ingest_usage_log(&mut index, &layout)?;
     let apps = index.list_apps()?;
     if apps.is_empty() {
-        println!("No applications registered. Register one with `wvm register <app-dir>`.");
+        println!("No applications registered yet.");
+        println!(
+            "Apps with an [app] section in wvm.toml auto-register when they run through the shim \
+             or `wvm exec`; or register one now with `wvm register <app-dir>`."
+        );
         return Ok(());
     }
 

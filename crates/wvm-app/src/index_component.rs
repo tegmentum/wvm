@@ -393,6 +393,9 @@ impl Index for ComponentIndex {
                     module: r.columns.get(6).and_then(as_text),
                     module_path: r.columns.get(7).and_then(as_text),
                     module_sha256: r.columns.get(8).and_then(as_text),
+                    // Not persisted in the usage table; only carried on the log
+                    // entry for auto-registration during ingest.
+                    manifest: None,
                     invoked_at: r.columns.get(9).and_then(as_int).unwrap_or(0),
                 })
             })
