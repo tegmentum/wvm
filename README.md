@@ -97,8 +97,6 @@ for one line, or `wvm upgrade --all` to bump every installed major line.
 | `wvm path [version]` | Print a runtime's filesystem path. |
 | `wvm exec [--no-usage] -- <args>` | Run the selected runtime, forwarding arguments (`--no-usage` skips recording). |
 | `wvm verify [version]` | Validate installation integrity against manifests. |
-| `wvm gc [--prune]` | Report (or delete) unreferenced store objects; also hints stale runtimes (unused, not seed/default/app-required). |
-| `wvm objects` | List stored objects with sizes and the versions referencing them. |
 
 ## Architecture
 
@@ -110,20 +108,21 @@ wvm (native bootstrapper, on PATH)
 
 wvm-app (wasm32-wasip2 component) — all other commands
   ├─ explicit wasi:cli command: include wasi:cli/imports + export wasi:cli/run@0.2.6
-  ├─ imports wasi:http               (downloads, via waki)
-  └─ imports sqlite:wasm/high-level  (the index; composed in via `wac`)
+  └─ imports wasi:http               (downloads, via waki)
 ```
 
-`wvm-app` is a standard `wasi:cli` command (built as a `cdylib` that owns its
-`wasi:cli/run@0.2.6` export), so it also runs directly under any wasi:cli host:
+`wvm-app` imports only WASI + `wasi:http` (both host-satisfied), so there is no
+component composition step. It is a standard `wasi:cli` command (a `cdylib` that
+owns its `wasi:cli/run@0.2.6` export), so it also runs directly under any
+wasi:cli host:
 
 ```sh
 wasmtime run -S http --dir "$WVM_HOME::$WVM_HOME" --env WVM_HOME="$WVM_HOME" \
-  target/wvm-app.composed.wasm -- list
+  target/wasm32-wasip2/release/wvm_app.wasm -- list
 ```
 
-The native binary embeds the composed app component; the ~50 MB runtime is
-downloaded on bootstrap rather than bundled.
+The native binary embeds the app component; the ~50 MB runtime is downloaded on
+bootstrap rather than bundled.
 
 ## Runtime discovery
 
@@ -211,68 +210,62 @@ wvm usage            # per-version counts + recent invocations
 wvm usage --limit 50
 ```
 
-The log is ingested into the `usage` table (SQLite) the next time a wvm command
-runs. `wvm list` annotates installed runtimes with when they were last used, and
-`wvm gc` hints runtimes unused for a while (default 90 days, `WVM_STALE_DAYS`
-overrides) that are safe to consider removing — excluding the seed, the default,
-and any app-required version. Observation only covers runtimes reached through
-`PATH`; an app that hardcodes an absolute runtime path is invisible here — which
-is what registration is for.
+The log is plain JSON Lines (`usage.log`), compacted on read. `wvm list`
+annotates installed runtimes with when they were last used and hints runtimes
+unused for a while (default 90 days, `WVM_STALE_DAYS` overrides) that are safe to
+consider removing — excluding the seed, the default, and any app-required
+version. Observation only covers runtimes reached through `PATH`; an app that
+hardcodes an absolute runtime path is invisible here — which is what
+registration is for.
 
 ## Storage layout
 
-WVM stores everything under `~/.tegmentum/wvm` (override with `WVM_HOME`). Files
-are kept once in a content-addressable store and referenced per version, so
-multiple versions share identical files:
+WVM stores everything under `~/.tegmentum/wvm` (override with `WVM_HOME`). Each
+runtime version is a plain directory of extracted files:
 
 ```text
 ~/.tegmentum/wvm/
   seed/
     bin/wasmtime                       # protected seed runtime (read-only)
     SEED                               # locked seed version
-  store/sha256/<ab>/<cd>/<digest>      # deduplicated file objects
   runtimes/wasmtime/
     versions/44.0.0/
-      bin/wasmtime                     # materialized from the store
-      manifest.json
+      bin/wasmtime                     # extracted directly (no shared store)
+      wasmtime-min, LICENSE, README.md
+      manifest.json                    # per-file digests, for `wvm verify`
     default                            # persistent default spec (plain text, e.g. `24`)
   shims/wasmtime                       # pass-through shim (link to the wvm binary)
-  downloads/
+  apps.json                            # app registrations
+  usage.log                            # shim invocation log (JSON Lines, compacted on read)
   cache/releases.json                  # cached remote release list (refresh-interval bounded)
-  usage.log                            # shim invocation log, ingested into index.db
-  index.db                             # SQLite backlink/metadata index (rebuildable cache)
+  downloads/
   wvm-app.wasm                         # the app component
-  config.toml
 ```
 
 The protected **seed** runtime lives in `seed/`, separate from user-managed
-versions; WVM never lists or deletes it. The `index.db` SQLite database tracks
-object backlinks and version metadata; it is a derived cache that `wvm gc`
-rebuilds from disk, so a missing or stale index is never fatal.
-
-Materialization is `copy` by default (symlinks are unavailable under wasm); the
-store still deduplicates shared files.
+versions; WVM never lists or deletes it. There is **no database and no shared
+object store** — each version's files stand alone. (Wasmtime ships ~4 files per
+version and its binary changes every release, so content-addressed dedup across
+versions saved essentially nothing.) The per-version `manifest.json` records file
+digests so `wvm verify` can check integrity.
 
 ## Build from source
 
-Requires the Rust `wasm32-wasip2` target and [`wac`](https://github.com/bytecodealliance/wac)
-(`cargo install wac-cli`).
+Requires only the Rust `wasm32-wasip2` target — the native binary embeds the
+wasm app component.
 
 ```sh
 rustup target add wasm32-wasip2
-make            # builds the app, composes it with the SQLite component,
-                # then builds the native binary (target/release/wvm)
+cargo xtask build   # builds the app (wasm), then the native binary (target/release/wvm)
 ```
 
-The vendored SQLite component (`vendor/sqlite-core.wasm`) provides
-`sqlite:wasm/high-level`; it is built from
-[`sqlite-wasm`](https://github.com/tegmentum/sqlite-wasm). The WASI WIT for the
-app's `wasi:cli` command world is vendored under `crates/wvm-app/wit/deps`
-(fetched with `wkg wit fetch`), so a normal build needs no network for WIT.
+The WASI WIT for the app's `wasi:cli` command world is vendored under
+`crates/wvm-app/wit/deps` (fetched with `wkg wit fetch`), so a normal build needs
+no network for WIT.
 
 ## Releasing
 
-For each platform, `make` produces `target/release/wvm`; publish it on the
+For each platform, `cargo xtask build` produces `target/release/wvm`; publish it on the
 GitHub release as `wvm-<arch>-<os>` (e.g. `wvm-aarch64-macos`) alongside a
 matching `wvm-<arch>-<os>.sha256`. Then bump `version` and the per-platform
 `sha256` values in [`Formula/wvm.rb`](Formula/wvm.rb). The `install.sh` script
@@ -285,23 +278,23 @@ marks these in `wvm list` and resolves `wvm install lts` to the newest one.
 ## Continuous integration
 
 CI runs on GitHub Actions (`.github/workflows/ci.yml`): format check, the full
-`make` build, clippy (`-D warnings`), and tests. Tagging `v*` triggers
+`cargo xtask build`, clippy (`-D warnings`), and tests. Tagging `v*` triggers
 `release.yml`, which builds the `wvm-<arch>-<os>` binaries + checksums for each
 platform and attaches them to the release.
 
 **Both workflows are gated on repository visibility** (`if: ${{ !github.event.repository.private }}`):
 while the repo is **private** the jobs are skipped (don't burn Actions minutes on
-work you can't see anyway) — iterate locally with `make act`. Flipping the repo
-**public** makes them run automatically, with no edits to the workflows.
+work you can't see anyway) — iterate locally with `cargo xtask act`. Flipping the
+repo **public** makes them run automatically, with no edits to the workflows.
 
 Run the same checks locally:
 
 ```sh
-make ci      # fmt + build + clippy + test, no Docker
-make act     # run the CI workflow in Docker via nektos/act (uses .actrc)
+cargo xtask ci      # fmt + build + clippy + test, no Docker
+cargo xtask act     # run the CI workflow in Docker via nektos/act (uses .actrc)
 ```
 
-`make act` runs the workflow regardless of visibility: `act` supplies no
+`cargo xtask act` runs the workflow regardless of visibility: `act` supplies no
 `repository.private` in its event payload, so the visibility gate evaluates
 truthy and the job runs. It needs a running Docker daemon (e.g.
 [Colima](https://github.com/abiosoft/colima): `colima start`). On Apple Silicon,

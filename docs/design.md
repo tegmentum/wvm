@@ -297,196 +297,52 @@ No deduplication is performed in V1.
 
 ---
 
-## Simple CAS Store
+## Storage (plain files)
 
-WVM may use a simple file-level content-addressable store for deduplication.
-This is an implementation detail, not the public identity model of WVM.
-
-### Goals
-
-- Avoid duplicate file storage across runtime versions.
-- Preserve simple version directories.
-- Support integrity verification.
-- Avoid dependency resolution, graph modeling, or package-manager behavior.
-
-### Non-Goals
-
-- Global Tegmentum CAS.
-- Cross-project artifact registry.
-- Garbage-collected package graph.
-- OCI/image-style layering.
-- Distributed synchronization.
-
-### Layout
+Each runtime version is extracted **directly** into its own directory. There is
+no shared object store and no database — the filesystem is the source of truth.
 
 ```text
 ~/.tegmentum/wvm/
-  store/
-    sha256/
-      ab/
-        cd/
-          abcdef...
-  runtimes/
-    wasmtime/
-      versions/
-        39.0.0/
-          bin/wasmtime -> ../../../../store/sha256/ab/cd/abcdef...
-          manifest.json
+  seed/{bin/wasmtime, SEED}            # protected seed runtime
+  runtimes/wasmtime/
+    versions/<version>/               # extracted files: bin/wasmtime, wasmtime-min,
+      manifest.json                   #   LICENSE, README.md + a manifest of digests
+    default                           # persistent default spec (plain text)
+  shims/wasmtime                      # pass-through shim (link to the wvm binary)
+  apps.json                           # application registrations
+  usage.log                           # shim invocation log (JSON Lines, compacted on read)
+  cache/releases.json                 # cached remote release list
+  downloads/                          # transient archive downloads
+  wvm-app.wasm                        # the embedded app component (written on bootstrap)
 ```
 
-### Object Identity
+### Why no content-addressable store
 
-Each stored file is addressed by:
+An earlier design used a `store/sha256/...` CAS with per-version backlinks and a
+SQLite index to deduplicate files across versions. Measurement killed it: across
+real installs the store deduplicated **~0.02%** — only `LICENSE` (and
+occasionally `README`). Every wasmtime version is a distinct build, so its
+~35-52 MB binary (99.95% of the bytes) is unique by construction. The CAS, the
+backlink index, copy-materialization, and object GC existed to save a few
+kilobytes, so they were removed. `install`/`uninstall` are now just "extract a
+directory" / "remove a directory".
 
-```
-sha256(file_bytes)
-```
+### Manifest and verification
 
-The object path is:
+Each version writes a `manifest.json` listing every file with its `sha256`, mode,
+and size. `wvm verify` re-hashes the on-disk files and compares, catching
+corruption or partial installs. This is the only integrity metadata kept.
 
-```
-store/sha256/<first-2>/<next-2>/<full-digest>
-```
+### Registrations and usage
 
-Example:
+- `apps.json` — application registrations (`{ "apps": [ ... ] }`), upserted by
+  name; read and rewritten whole (it is small).
+- `usage.log` — one JSON object per runtime invocation, appended by the shim. It
+  is the usage store itself (no ingest step); reads aggregate it in memory and
+  compact it to the most recent entries once it grows past a cap.
 
-```
-store/sha256/8f/21/8f21c0...
-```
-
-### Install Flow
-
-```
-download archive
-  ↓
-verify archive checksum/signature
-  ↓
-extract to staging directory
-  ↓
-hash each file
-  ↓
-copy unique files into store
-  ↓
-materialize version directory
-  ↓
-write manifest
-  ↓
-atomically publish version
-```
-
-### Materialization
-
-V1 should use symlinks by default.
-
-Optional future strategies:
-
-```
-symlink
-hardlink
-reflink
-copy
-```
-
-The materialization strategy should be configurable, but the default should
-remain simple and inspectable.
-
-### Manifest
-
-```json
-{
-  "runtime": "wasmtime",
-  "version": "39.0.0",
-  "platform": "linux-x86_64",
-  "archive_sha256": "...",
-  "materialization": "symlink",
-  "files": [
-    {
-      "path": "bin/wasmtime",
-      "sha256": "...",
-      "mode": "0755",
-      "size": 12345678
-    }
-  ]
-}
-```
-
-### Verification
-
-`wvm verify` should:
-
-```
-read manifest
-check each file path exists
-resolve symlink target
-hash target bytes
-compare sha256
-verify mode
-```
-
-### Garbage Collection
-
-V1 garbage collection can be conservative.
-
-Algorithm:
-
-```
-collect all sha256 values referenced by installed manifests
-walk store/sha256
-delete unreferenced objects only when --prune is passed
-```
-
-Command:
-
-```
-wvm gc --prune
-```
-
-Default `wvm gc` should only report reclaimable space.
-
-### Index Database
-
-WVM maintains a small SQLite index at `~/.tegmentum/wvm/index.db` to track
-object backlinks and version metadata.
-
-The index is a **derived cache, not a source of truth.** The store and the
-per-version manifests on disk remain authoritative; the index can always be
-rebuilt from them. A missing, stale, or corrupt index is never fatal — it is
-reconciled from disk before any destructive operation.
-
-Schema (conceptually):
-
-```text
-objects(digest PRIMARY KEY, size)
-versions(id, runtime, version, platform, archive_sha256, materialization, installed_at)
-object_refs(version_id -> versions, digest -> objects, path, mode, size)   # backlinks
-```
-
-The index serves two purposes:
-
-- **Backlinks.** `object_refs` records which versions reference each object, so
-  GC is the indexed query "objects with no backlinks" rather than a full
-  manifest scan. `wvm objects` surfaces these backlinks for inspection.
-- **Metadata.** Per-version platform, archive digest, materialization strategy,
-  and install time are queryable without re-reading every manifest.
-
-Lifecycle:
-
-- `install` / `uninstall` update the index live (best-effort).
-- `gc` reindexes from disk first (objects from the store, backlinks from
-  manifests), guaranteeing correctness and catching orphans from interrupted
-  installs, then deletes objects with zero backlinks.
-
-This keeps the CAS itself boring: the index accelerates and enriches GC without
-becoming the source of truth.
-
-### Rule
-
-The CAS must stay boring.
-
-It stores files by hash and materializes runtime directories.
-
-It does not resolve dependencies, own global package identity, or become the
-center of the WVM architecture.
+Both are advisory bookkeeping: losing either is never fatal.
 
 ---
 
@@ -522,20 +378,20 @@ All Operations Performed In WebAssembly
   an explicit **`wasi:cli` command** component (`wasm32-wasip2`, built as a
   `cdylib`): it formally `include`s `wasi:cli/imports@0.2.6` and owns the
   `wasi:cli/run@0.2.6` export via `wit-bindgen` (rather than relying on the Rust
-  std command shape, which pins `run@0.2.0`). It additionally imports
-  `wasi:http` (downloads, via `waki`) and `sqlite:wasm/high-level` (the index),
-  the latter satisfied by composing in a vendored SQLite component with `wac`.
-  Because it is a standard wasi:cli command, it also runs directly under any
-  wasi:cli host (e.g. `wasmtime run … wvm-app.composed.wasm -- list`). The WASI
-  WIT is vendored under `crates/wvm-app/wit/deps` (fetched with `wkg`).
+  std command shape, which pins `run@0.2.0`). It additionally imports only
+  `wasi:http` (downloads, via `waki`) — both host-satisfied, so there is no
+  component-composition step. Because it is a standard wasi:cli command, it also
+  runs directly under any wasi:cli host (e.g. `wasmtime run … wvm_app.wasm --
+  list`). The WASI WIT is vendored under `crates/wvm-app/wit/deps` (fetched with
+  `wkg`).
 
 ### Protected seed runtime
 
 The seed is the Wasmtime that runs the app. It lives in `WVM_HOME/seed/`,
 separate from user-managed versions, is downloaded once and recorded in a
 `SEED` marker, and is set read-only. WVM's own commands never list or delete
-it: `wvm uninstall <seed>` is refused and `wvm gc` only walks the object store,
-never the seed directory. Users still install and select their own runtimes
+it: `wvm uninstall <seed>` is refused, and the seed directory sits outside
+`runtimes/wasmtime/versions/`. Users still install and select their own runtimes
 independently.
 
 ### Version selection: default vs. session
@@ -620,15 +476,16 @@ runtimes = ["44.0.0", "45.0.0"]            # wvm-managed versions tested against
 # runtime-path = "/opt/foo/bin/wasmtime"   # OR a custom runtime the app supplies
 ```
 
-### Index (cache)
+### Registry (cache)
+
+Registrations are cached in `apps.json` as `{ "apps": [ … ] }`, each entry:
 
 ```text
-apps(name PRIMARY KEY, path, runtime_path, registered_at)
-app_runtimes(app -> apps, version)         # app depends on a wvm-managed version
+{ name, path, runtime_path?, runtimes: [version, …], registered_at }
 ```
 
 An app that sets `runtime-path` is fully decoupled — it is recorded for
-visibility but has no `app_runtimes` rows and pins no wvm-managed runtime.
+visibility but lists no wvm-managed `runtimes`.
 
 ### Lifecycle
 
@@ -653,34 +510,31 @@ name; `wvm shell-init` prepends `shims/` to `PATH`. An app that calls
 
 1. resolves the active version (the same pin → session → default order and
    floating-spec auto-install as `wvm exec`);
-2. appends `{version, app, caller, cwd, invoked_at}` to `usage.log` — a single
-   native append, deliberately avoiding a WASM boot or DB write on the hot path;
-3. execs the real runtime (an absolute store path, so `PATH` is not re-consulted
-   and there is no recursion).
+2. appends one JSON line to `usage.log` — a single native append, deliberately
+   avoiding a WASM boot or DB write on the hot path;
+3. execs the real runtime (an absolute path, so `PATH` is not re-consulted and
+   there is no recursion).
 
-The log is drained into a `usage` table by the app on the next command that
-touches the index (`usage`, `apps`, `gc`); the drain renames the log aside first
-so a concurrent shim append is never lost. Identity is best-effort: `WVM_APP`
-is the app's own opt-in label, otherwise the parent process name where the OS
-exposes it. `WVM_NO_USAGE=1` opts out.
+`usage.log` is the usage store itself — one JSON object per invocation, read and
+aggregated in memory by `wvm usage` / `wvm list` and compacted to the most recent
+entries once it grows past a cap. Each entry captures the full run:
 
 ```text
-usage(id, version, runtime_path, app, caller, cwd,
-      args, module, module_path, module_sha256, invoked_at)
+{ version, runtime_path, app, caller, cwd,
+  args, module, module_path, module_sha256, invoked_at }
 ```
 
-Each invocation captures the full run: the resolved version and runtime binary
-path, the module (as given, its canonical path, and its `sha256`), the complete
-argv, and the app/caller/cwd/time. `args` is stored as a JSON array; the module
-is identified best-effort (first positional that is a file or `.wasm`/`.wat`/
-`.cwasm`), while the raw `args` remain the ground truth. New columns are added to
-older DBs via an `ALTER TABLE` migration guarded by `PRAGMA table_info`.
+The module is identified best-effort (first positional that is a file or
+`.wasm`/`.wat`/`.cwasm`), while the raw `args` remain the ground truth. Identity
+is best-effort: `WVM_APP` is the app's own opt-in label, otherwise the parent
+process name where the OS exposes it. `WVM_NO_USAGE=1` (or a leading
+`--no-usage`) opts out.
 
 This inverts the dependency arrow — instead of app → wvm, it is
 wvm → (observing) → app — and complements registration: the shim sees only
 runtimes reached through `PATH`, while registration covers apps that hardcode a
-runtime and never touch the shim. `reindex` never clears `usage` (or `apps`);
-they are observed/declared history, not a cache derived from the store.
+runtime and never touch the shim. `usage.log` and `apps.json` are
+observed/declared history — plain files, not derived from anything else.
 
 ---
 
@@ -712,10 +566,10 @@ channel = "lts"
 
 ### Optional Deduplication
 
-A lightweight content-addressable store may be introduced later if storage
-becomes a practical concern.
-
-This is intentionally deferred.
+Deduplication was tried (a content-addressable store) and removed after
+measurement showed ~0.02% savings — wasmtime versions share no large files. It
+could be revisited only if a future managed runtime actually shipped
+substantial identical content across versions.
 
 ---
 

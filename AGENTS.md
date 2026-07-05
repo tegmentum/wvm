@@ -9,29 +9,25 @@ runtime. See [`docs/design.md`](docs/design.md) for the full architecture.
 
 ## Build
 
-**Use `make`, not `cargo build`.** A bare `cargo build -p wvm` embeds an empty
-placeholder wasm and produces a non-working binary (it prints a `composed app
-wasm not found` warning). The real build is a pipeline:
+The native `wvm` binary embeds the wasm app component, so the build is two
+steps (build the app for wasm, then the native binary that embeds it). One
+command drives it:
 
 ```sh
-make            # app (wasm) → wac compose with sqlite → embed into native `wvm`
+cargo xtask build        # or `cargo xtask ci` for fmt + clippy (both targets) + test
 ```
 
-Prereqs (once):
+Prereq (once): `rustup target add wasm32-wasip2`.
 
-```sh
-rustup target add wasm32-wasip2
-cargo install wac-cli --locked
-```
-
-The SQLite component (`vendor/sqlite-core.wasm`) is vendored and committed —
-nothing to fetch.
+A bare `cargo build -p wvm` embeds an empty placeholder (it prints a warning and
+the binary errors at runtime) — always use `cargo xtask build` for a working
+binary.
 
 ## Verify (run before committing)
 
 ```sh
-make ci     # fmt --check + build + clippy (native AND wasm, -D warnings) + test
-make act    # optional: run the GitHub CI workflow locally in Docker (needs Colima/Docker)
+cargo xtask ci      # fmt --check + build + clippy (native AND wasm, -D warnings) + test
+cargo xtask act     # optional: run the GitHub CI workflow locally in Docker (needs Colima/Docker)
 ```
 
 Clippy must pass on **both** targets — CI gates native and `wasm32-wasip2`
@@ -39,14 +35,17 @@ separately.
 
 ## Architecture
 
-Three crates (workspace `default-members` deliberately **excludes** `wvm-app`,
-so `cargo build`/`test` at the root skip the wasm crate — build it via `make`):
-
 | Crate | Target | Role |
 | --- | --- | --- |
-| `crates/wvm-core` | native **and** wasm | Shared logic over `std::fs`: layout, store (CAS), manifest, discovery, specs, usage, cache. HTTP and the index are behind traits. |
-| `crates/wvm-app` | `wasm32-wasip2` (cdylib) | The real application — every command. Exports `wasi:cli/run`; imports `wasi:http` + the `sqlite:wasm` component. This is where command logic lives. |
-| `crates/wvm` | native | The only thing on `PATH`: bootstrapper + `wasmtime` shim. Downloads/locks the seed, embeds the composed app, launches it, handles `exec`/`--upgrade`/`completions`/`shell-init` natively. |
+| `crates/wvm-core` | native **and** wasm | Shared logic over `std::fs`: layout, manifest, discovery, specs, apps registry, usage, cache. HTTP is behind a trait. |
+| `crates/wvm-app` | `wasm32-wasip2` (cdylib) | The real application — every command. Exports `wasi:cli/run`; imports only WASI + `wasi:http`. This is where command logic lives. |
+| `crates/wvm` | native | The only thing on `PATH`: bootstrapper + `wasmtime` shim. Downloads/locks the seed, embeds the app wasm, launches it; handles `exec`/`--upgrade`/`completions`/`shell-init` natively. |
+| `xtask` | native | Build orchestration (`cargo xtask …`). |
+
+**Storage is plain files** — no database, no content-addressable store. Each
+runtime version is extracted directly into `runtimes/wasmtime/versions/<v>/`;
+`apps.json` holds registrations and `usage.log` (JSONL) holds usage. Everything
+else is derived by scanning version dirs + each `manifest.json`.
 
 ## Conventions
 
@@ -55,21 +54,17 @@ so `cargo build`/`test` at the root skip the wasm crate — build it via `make`)
 - Match surrounding style; keep comments at the density of the file you're in.
 - Commit or push only when asked.
 
-## Gotchas (wasm sandbox + boundary)
+## Gotchas (the wasm boundary)
 
-- `wvm-app` runs sandboxed: **no symlinks** (materialize with `copy`),
-  `std::process::id()` **panics**, and the cwd/host are invisible — host arch/OS
-  arrive via `WVM_HOST_ARCH`/`WVM_HOST_OS`, and `WVM_HOME` must be preopened.
-  cwd-dependent work (`exec`, project-pin discovery) is handled **natively** in
-  `crates/wvm/src/main.rs`.
+- `wvm-app` runs sandboxed: `std::process::id()` **panics**, and the cwd/host
+  are invisible — host arch/OS arrive via `WVM_HOST_ARCH`/`WVM_HOST_OS`, and
+  `WVM_HOME` must be preopened. cwd-dependent work (`exec`, project-pin
+  discovery) is handled **natively** in `crates/wvm/src/main.rs`.
 - **Env vars the app reads must be forwarded** in `app_command()`
   (`crates/wvm/src/main.rs`) — the guest only sees an explicit allowlist (e.g.
   `WVM_REFRESH_INTERVAL`, `WVM_STALE_DAYS`). A new env knob that isn't forwarded
   silently has no effect in the app.
-- The index is SQLite via the `sqlite:wasm` component (app-only); schema changes
-  need a migration (`ALTER TABLE` guarded by `PRAGMA table_info`, see
-  `index_component.rs`).
-- The seed runtime is protected: never uninstalled, never GC'd.
+- The seed runtime is protected: never uninstalled.
 
 ## Docs & tooling
 

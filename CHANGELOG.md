@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- **Dropped the content-addressable store and the SQLite index** for plain
+  files. Measured dedup across wasmtime versions was ~0.02% (every version is a
+  distinct build), so the store, backlink index, copy-materialization, and
+  SQLite component (composed in with `wac`) were removed. Runtimes now extract
+  directly into `runtimes/wasmtime/versions/<v>/`; registrations live in
+  `apps.json` and usage in `usage.log` (JSON Lines, compacted on read). The wasm
+  app imports only WASI + `wasi:http`, so the build is plain cargo.
+- **Build:** replaced the Makefile with `cargo xtask` (`build`/`ci`/`act`) — no
+  `make` dependency, cross-platform. Removes the `wac` prerequisite and the
+  vendored `sqlite-core.wasm`.
+
+### Removed
+
+- `wvm gc` and `wvm objects` — there is no object store to collect or list. The
+  stale-runtime hints that `wvm gc` printed now appear in `wvm list`.
+
 ## 0.3.0
 
 Zero-setup installs and self-management. A fresh install has a working runtime
