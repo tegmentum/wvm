@@ -137,6 +137,7 @@ fn print_help() {
     println!("  usage [--limit N]    Show runtime invocations observed via the shim");
     println!("  verify [version]     Validate installation integrity");
     println!("  completions <shell>  Print a completion script (bash, zsh, fish)");
+    println!("  doctor               Diagnose the install, shell integration, and PATH");
     println!();
     println!("Self-management:");
     println!("  --version, -V        Print the wvm version");

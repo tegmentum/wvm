@@ -6,6 +6,7 @@
 //! logic lives in the app (`wvm-app`), executed as a WebAssembly component.
 
 mod completions;
+mod doctor;
 mod seed;
 mod selfupdate;
 mod shim;
@@ -107,6 +108,12 @@ fn run() -> Result<()> {
                 std::process::exit(2);
             }
         };
+    }
+
+    // `doctor` — diagnose install + shell integration. Native: needs the real
+    // PATH, rc files, and to run external wasmtime binaries.
+    if args.first().map(String::as_str) == Some("doctor") {
+        return doctor::run(&layout);
     }
 
     // Throttled, best-effort check for a newer wvm release. Only on ordinary
