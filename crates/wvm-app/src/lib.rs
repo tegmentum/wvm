@@ -118,7 +118,7 @@ fn flag_value(args: &[String], name: &str) -> Option<i64> {
 }
 
 fn print_help() {
-    println!("wvm — WebAssembly Version Manager");
+    println!("wvm — Wasmtime Version Manager");
     println!();
     println!("Commands:");
     println!("  install <spec>       Install a runtime (spec: latest, lts, 24, 24.0, or 24.0.1)");

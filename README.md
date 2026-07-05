@@ -1,4 +1,4 @@
-# WVM — WebAssembly Version Manager
+# WVM — Wasmtime Version Manager
 
 WVM is a lightweight runtime manager for [Wasmtime](https://wasmtime.dev). It
 installs, selects, discovers, validates, and executes versioned WebAssembly

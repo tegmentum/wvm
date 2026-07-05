@@ -1,7 +1,7 @@
 ---
 name: wvm
 description: >-
-  How to use wvm, the WebAssembly Version Manager, to install, pin, switch, run,
+  How to use wvm, the Wasmtime Version Manager, to install, pin, switch, run,
   and manage versioned Wasmtime runtimes. Use when the user wants to install or
   manage Wasmtime / WebAssembly runtime versions, pin a project to a runtime,
   run a .wasm module through a managed runtime, set up the wvm shim or shell

@@ -10,7 +10,7 @@
 # upload them to the GitHub release as `wvm-<arch>-<os>`, then bump `version`
 # and replace each `sha256` below (`shasum -a 256 wvm-<arch>-<os>`).
 class Wvm < Formula
-  desc "WebAssembly Version Manager — installs and manages Wasmtime runtimes"
+  desc "Wasmtime Version Manager — installs and manages Wasmtime runtimes"
   homepage "https://github.com/tegmentum/wvm"
   version "0.4.0"
   license "Apache-2.0"
