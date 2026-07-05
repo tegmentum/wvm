@@ -1,23 +1,17 @@
 //! `wvm install` — executed inside the wasm app, downloading via `wasi:http`
-//! and storing through the CAS. Uses `copy` materialization (symlinks are
-//! unavailable under wasm; the store still deduplicates).
+//! and extracting the runtime files directly into its version directory.
 
-use crate::commands::{open_index, seed_version};
+use crate::commands::seed_version;
 use crate::http_wasi::WasiHttp;
 use crate::progress::Spinner;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use std::cmp::Ordering;
-use wvm_core::config::Materialization;
 use wvm_core::http::Http;
-use wvm_core::index::Index;
 use wvm_core::layout::{Layout, WASMTIME};
 use wvm_core::manifest::{mode_string, FileEntry, Manifest};
 use wvm_core::platform::Platform;
-use wvm_core::{
-    archive, cache, discovery, hash, materialize, normalize_version, store, version_cmp,
-    VersionSpec,
-};
+use wvm_core::{archive, cache, discovery, hash, normalize_version, version_cmp, VersionSpec};
 
 const REPO: &str = "bytecodealliance/wasmtime";
 
@@ -247,41 +241,32 @@ fn install_inner(version_arg: &str, make_default: bool, auto_default: bool) -> R
         .with_context(|| format!("creating staging dir {}", staging.display()))?;
 
     let mut entries = Vec::new();
-    let mut deduped = 0usize;
-    let mut store_sp = Spinner::new("Storing files");
+    let mut store_sp = Spinner::new("Writing files");
     for (i, f) in files.iter().enumerate() {
-        let digest = hash::sha256_hex(&f.data);
-        if store::has(&layout, &digest) {
-            deduped += 1;
+        // Write the extracted bytes straight into the version directory. The
+        // exec bit is not set here — the app is wasm/non-unix; the native
+        // bootstrapper restores it at run time.
+        let dest = staging.join(&f.logical_path);
+        if let Some(parent) = dest.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("creating {}", parent.display()))?;
         }
-        let object = store::put(&layout, &digest, &f.data, f.mode)?;
-        // `copy` materialization: symlinks are unavailable under wasm.
-        materialize::materialize(
-            Materialization::Copy,
-            &staging,
-            &f.logical_path,
-            &object,
-            f.mode,
-        )?;
+        std::fs::write(&dest, &f.data).with_context(|| format!("writing {}", dest.display()))?;
         entries.push(FileEntry {
             path: f.logical_path.clone(),
-            sha256: digest,
+            sha256: hash::sha256_hex(&f.data),
             mode: mode_string(f.mode),
             size: f.data.len() as u64,
         });
         store_sp.tick(&format!("{}/{}", i + 1, files.len()));
     }
-    store_sp.finish(&format!(
-        "Stored {} files ({deduped} reused from store)",
-        files.len()
-    ));
+    store_sp.finish(&format!("Wrote {} files", files.len()));
 
     let manifest = Manifest {
         runtime: WASMTIME.to_string(),
         version: version.clone(),
         platform: platform.label(),
         archive_sha256,
-        materialization: Materialization::Copy.as_str().to_string(),
         files: entries,
     };
     manifest.write(&staging.join("manifest.json"))?;
@@ -294,14 +279,7 @@ fn install_inner(version_arg: &str, make_default: bool, auto_default: bool) -> R
         .with_context(|| format!("publishing {}", final_dir.display()))?;
     let _ = std::fs::remove_file(&download_path);
 
-    println!(
-        "Installed wasmtime {version} ({} files, {deduped} reused from store)",
-        files.len()
-    );
-
-    if let Err(e) = (|| open_index(&layout)?.record_install(&manifest, now_epoch()))() {
-        eprintln!("warning: could not update index: {e:#}");
-    }
+    println!("Installed wasmtime {version} ({} files)", files.len());
 
     // The first runtime installed becomes the default; otherwise honor
     // --default/--use.

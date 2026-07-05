@@ -1,4 +1,4 @@
-//! Per-version `manifest.json` describing materialized files and their digests.
+//! Per-version `manifest.json` describing the extracted files and their digests.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,6 @@ pub struct Manifest {
     pub version: String,
     pub platform: String,
     pub archive_sha256: String,
-    pub materialization: String,
     pub files: Vec<FileEntry>,
 }
 

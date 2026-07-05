@@ -309,7 +309,7 @@ fn ensure_executable(_path: &Path) {}
 /// Write the embedded app component to `WVM_HOME` if missing or changed.
 fn materialize_app(layout: &Layout) -> Result<()> {
     if APP_WASM.is_empty() {
-        bail!("no app component embedded; build with `make` (which builds and composes wvm-app)");
+        bail!("no app component embedded; build with `make` (which builds and embeds wvm-app)");
     }
     let dest = layout.app_wasm();
     let needs_write = match std::fs::metadata(&dest) {

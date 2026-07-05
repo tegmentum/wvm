@@ -1,11 +1,11 @@
-//! Embed the composed WASM app component into the native binary.
+//! Embed the WASM app component into the native binary.
 //!
-//! The Makefile builds `wvm-app`, composes it with the SQLite component, and
-//! places the result at `target/wvm-app.composed.wasm`. This script copies that
-//! into `OUT_DIR/app.wasm` for `include_bytes!`. If the composed wasm is absent
-//! (e.g. a bare `cargo build` during development), an empty placeholder is
-//! written so the crate still compiles; the binary reports a clear error at
-//! runtime if the app is missing.
+//! The Makefile builds `wvm-app` for `wasm32-wasip2`, producing
+//! `target/wasm32-wasip2/release/wvm_app.wasm`. This script copies that into
+//! `OUT_DIR/app.wasm` for `include_bytes!`. If the wasm is absent (e.g. a bare
+//! `cargo build` during development), an empty placeholder is written so the
+//! crate still compiles; the binary reports a clear error at runtime if the app
+//! is missing.
 
 use std::path::PathBuf;
 
@@ -19,7 +19,9 @@ fn main() {
         .join("..")
         .join("..")
         .join("target")
-        .join("wvm-app.composed.wasm");
+        .join("wasm32-wasip2")
+        .join("release")
+        .join("wvm_app.wasm");
 
     let source = candidate.filter(|p| p.exists()).or_else(|| {
         if default.exists() {

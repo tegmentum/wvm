@@ -33,9 +33,6 @@ jobs:
         with:
           targets: wasm32-wasip2
 
-      - name: Install wac (component composer)
-        run: cargo install wac-cli --locked
-
       - name: Build
         run: make
 

@@ -27,13 +27,10 @@ jobs:
       - name: Cache cargo build
         uses: Swatinem/rust-cache@v2
 
-      - name: Install wac (component composer)
-        run: cargo install wac-cli --locked
-
       - name: Format check
         run: cargo fmt --all --check
 
-      - name: Build (app -> compose -> native)
+      - name: Build (app -> native)
         run: make
 
       - name: Clippy (native crates)

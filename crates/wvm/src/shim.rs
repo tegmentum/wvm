@@ -88,6 +88,20 @@ pub(crate) fn record_invocation(
         invoked_at: now_epoch(),
     };
     let _ = usage::record(layout, &entry);
+
+    // Auto-register an app observed running from a directory with an `[app]`
+    // manifest, so `uninstall` gating and `wvm apps` work without a manual
+    // `wvm register`. Best-effort: a failed registration never fails the launch.
+    if let Some(app_ref) = &entry.manifest {
+        let _ = wvm_core::apps::register(
+            layout,
+            &app_ref.name,
+            Some(&app_ref.dir),
+            app_ref.runtime_path.as_deref(),
+            &app_ref.runtimes,
+            entry.invoked_at,
+        );
+    }
 }
 
 /// Discover an `[app]` manifest at or above `cwd`, so the app can auto-register

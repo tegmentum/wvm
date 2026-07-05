@@ -3,12 +3,10 @@
 //! Built as a `cdylib` for `wasm32-wasip2` that owns the `wasi:cli/run` export
 //! (consistent at 0.2.6) rather than relying on the Rust std command adapter.
 //! Launched inside the protected seed Wasmtime by the native `wvm`
-//! bootstrapper. Filesystem/CAS logic comes from `wvm-core`; the index is the
-//! `sqlite:wasm/high-level` component.
+//! bootstrapper. All logic comes from `wvm-core`; persistence is plain files.
 
 mod commands;
 mod http_wasi;
-mod index_component;
 mod install;
 mod progress;
 
@@ -17,9 +15,6 @@ wit_bindgen::generate!({
     path: "wit",
     generate_all,
 });
-
-/// Re-export of the SQLite component's high-level interface for submodules.
-pub(crate) use sqlite::wasm::high_level as sql;
 
 struct Component;
 
@@ -81,8 +76,6 @@ impl exports::wasi::cli::run::Guest for Component {
                 None => missing_arg("uninstall <version>"),
             },
             "verify" => commands::verify(positional),
-            "gc" => commands::gc(flag("--prune")),
-            "objects" => commands::objects(),
             "help" | "--help" | "-h" => {
                 print_help();
                 Ok(())
@@ -143,8 +136,6 @@ fn print_help() {
     println!("  apps                 List registered applications and their runtimes");
     println!("  usage [--limit N]    Show runtime invocations observed via the shim");
     println!("  verify [version]     Validate installation integrity");
-    println!("  gc [--prune]         Report/reclaim unreferenced store objects");
-    println!("  objects              List stored objects and their backlinks");
     println!("  completions <shell>  Print a completion script (bash, zsh, fish)");
     println!();
     println!("Self-management:");

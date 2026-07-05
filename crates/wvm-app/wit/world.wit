@@ -2,10 +2,9 @@ package wvm:app;
 
 // An explicit wasi:cli command: includes the full wasi:cli imports world and
 // owns the `wasi:cli/run` export (consistent at 0.2.6), rather than relying on
-// the Rust std adapter's implicit command shape. Adds the SQLite index import;
-// `wasi:http` is provided transitively by the `waki` dependency.
+// the Rust std adapter's implicit command shape. `wasi:http` is provided
+// transitively by the `waki` dependency.
 world app {
   include wasi:cli/imports@0.2.6;
   export wasi:cli/run@0.2.6;
-  import sqlite:wasm/high-level@0.1.0;
 }

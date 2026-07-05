@@ -1,18 +1,18 @@
 //! WVM command implementations, executed inside the wasm app component.
 //!
-//! Filesystem/CAS logic comes from `wvm-core`; the index is the
-//! `sqlite:wasm/high-level` component via [`ComponentIndex`].
+//! All logic comes from `wvm-core`; persistence is plain files (`apps.json` for
+//! registrations, `usage.log` for observed invocations, and the version
+//! directories themselves).
 
-use crate::index_component::ComponentIndex;
 use crate::install;
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::HashSet;
 use std::path::Path;
 use wvm_core::appmanifest::AppManifest;
-use wvm_core::index::{ingest_usage_log, reindex, Index};
 use wvm_core::layout::{Layout, WASMTIME};
 use wvm_core::manifest::Manifest;
-use wvm_core::{cache, discovery, human_bytes, normalize_version, version_cmp, VersionSpec};
+use wvm_core::usage;
+use wvm_core::{cache, discovery, normalize_version, version_cmp, VersionSpec};
 
 fn now_epoch() -> i64 {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -20,15 +20,6 @@ fn now_epoch() -> i64 {
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0)
-}
-
-/// Open the index DB through the SQLite component.
-pub fn open_index(layout: &Layout) -> Result<ComponentIndex> {
-    let path = layout.db_file();
-    let path = path
-        .to_str()
-        .ok_or_else(|| anyhow!("WVM_HOME path is not valid UTF-8"))?;
-    ComponentIndex::open(path)
 }
 
 /// `wvm list [--all]` — one list of all available versions (most recent first),
@@ -49,20 +40,14 @@ pub fn list(all: bool) -> Result<()> {
     let installed = installed_versions(&layout)?;
     let installed_set: HashSet<&str> = installed.iter().map(String::as_str).collect();
 
-    // Best-effort last-used annotations from the usage table (ingesting any
-    // pending shim invocations first). Never fatal to listing.
+    // Best-effort last-used annotations derived from the usage log. Never fatal
+    // to listing.
     let now = now_epoch();
-    let usage_map: std::collections::HashMap<String, i64> = {
-        let mut idx = open_index(&layout).ok();
-        if let Some(i) = idx.as_mut() {
-            let _ = ingest_usage_log(i, &layout);
-        }
-        idx.and_then(|i| i.usage_by_version().ok())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|u| (u.version, u.last_used))
-            .collect()
-    };
+    let usage_entries = usage::read(&layout).unwrap_or_default();
+    let usage_map: std::collections::HashMap<String, i64> = usage::by_version(&usage_entries)
+        .into_iter()
+        .map(|u| (u.version, u.last_used))
+        .collect();
 
     // Try the remote list; fall back to installed-only when offline.
     let (mut versions, offline) = match install::fetch_release_versions(all) {
@@ -133,6 +118,60 @@ pub fn list(all: bool) -> Result<()> {
     }
     if offline {
         eprintln!("(offline: only installed versions shown)");
+    }
+
+    report_stale_runtimes(&layout, &usage_map)?;
+    Ok(())
+}
+
+/// Advisory: installed runtimes not used in a while and safe to consider for
+/// removal (not the seed, default, or an app dependency). Judged only when
+/// there is observed usage to compare against — otherwise there is no basis and
+/// nothing is printed. `WVM_STALE_DAYS` overrides the 90-day threshold.
+fn report_stale_runtimes(
+    layout: &Layout,
+    usage: &std::collections::HashMap<String, i64>,
+) -> Result<()> {
+    if usage.is_empty() {
+        return Ok(()); // no observations yet — can't judge staleness
+    }
+
+    let threshold_days: i64 = std::env::var("WVM_STALE_DAYS")
+        .ok()
+        .and_then(|s| s.trim().parse().ok())
+        .unwrap_or(90);
+    let now = now_epoch();
+    let seed = seed_version(layout);
+    let default_resolved =
+        discovery::default_version(layout).and_then(|s| discovery::resolve_installed(layout, &s));
+
+    let mut stale: Vec<(String, String)> = Vec::new();
+    for v in installed_versions(layout)? {
+        if seed.as_deref() == Some(v.as_str()) || default_resolved.as_deref() == Some(v.as_str()) {
+            continue;
+        }
+        if !wvm_core::apps::apps_using(layout, &v)
+            .unwrap_or_default()
+            .is_empty()
+        {
+            continue;
+        }
+        match usage.get(v.as_str()) {
+            Some(&t) => {
+                let age = (now - t) / 86400;
+                if age >= threshold_days {
+                    stale.push((v, format!("last used {age}d ago")));
+                }
+            }
+            None => stale.push((v, "never used".to_string())),
+        }
+    }
+
+    if !stale.is_empty() {
+        println!("\nStale runtimes (unused ≥ {threshold_days}d; not seed/default/app-required):");
+        for (v, note) in stale {
+            println!("  {v}   {note}   → wvm uninstall {v}");
+        }
     }
     Ok(())
 }
@@ -355,9 +394,7 @@ pub fn uninstall(version_arg: &str, force: bool) -> Result<()> {
     }
 
     // Gate on registered application dependencies.
-    let dependents = open_index(&layout)
-        .and_then(|idx| idx.apps_using(&version))
-        .unwrap_or_default();
+    let dependents = wvm_core::apps::apps_using(&layout, &version).unwrap_or_default();
     if !dependents.is_empty() {
         if !force {
             bail!(
@@ -374,16 +411,11 @@ pub fn uninstall(version_arg: &str, force: bool) -> Result<()> {
 
     std::fs::remove_dir_all(&dir).with_context(|| format!("removing {}", dir.display()))?;
 
-    if let Ok(mut index) = open_index(&layout) {
-        let _ = index.remove_version(WASMTIME, &version);
-    }
-
     if discovery::default_version(&layout).as_deref() == Some(version.as_str()) {
         let _ = std::fs::remove_file(layout.default_file(WASMTIME));
         eprintln!("note: {version} was the default; no default is set now");
     }
     println!("Uninstalled wasmtime {version}");
-    println!("Run `wvm gc --prune` to reclaim unreferenced store objects.");
     Ok(())
 }
 
@@ -434,137 +466,6 @@ pub fn verify(version_arg: Option<&str>) -> Result<()> {
     Ok(())
 }
 
-pub fn gc(prune: bool) -> Result<()> {
-    let layout = Layout::discover()?;
-    let mut index = open_index(&layout)?;
-    // Flush any pending shim invocations, then reconcile object state.
-    let _ = ingest_usage_log(&mut index, &layout);
-    reindex(&mut index, &layout)?;
-
-    let stats = index.stats()?;
-    println!(
-        "Store: {} object(s), {} referenced, {} total.",
-        stats.objects,
-        stats.referenced,
-        human_bytes(stats.total_size.max(0) as u64)
-    );
-
-    let unreferenced = index.unreferenced_objects()?;
-    let reclaimable: i64 = unreferenced.iter().map(|(_, s)| *s).sum();
-    if unreferenced.is_empty() {
-        println!("Nothing to reclaim.");
-    } else if prune {
-        for (digest, _) in &unreferenced {
-            let p = layout.object_path(digest);
-            if p.exists() {
-                std::fs::remove_file(&p).with_context(|| format!("removing {}", p.display()))?;
-            }
-            index.delete_object(digest)?;
-        }
-        println!(
-            "Pruned {} unreferenced object(s), reclaimed {}.",
-            unreferenced.len(),
-            human_bytes(reclaimable.max(0) as u64)
-        );
-    } else {
-        println!(
-            "{} unreferenced object(s), {} reclaimable. Run `wvm gc --prune` to delete.",
-            unreferenced.len(),
-            human_bytes(reclaimable.max(0) as u64)
-        );
-    }
-
-    report_stale_runtimes(&layout, &index)?;
-    Ok(())
-}
-
-/// Advisory: installed runtimes not used in a while and safe to consider for
-/// removal (not the seed, default, or an app dependency). Judged only when
-/// there is observed usage to compare against — otherwise there is no basis and
-/// nothing is printed. `WVM_STALE_DAYS` overrides the 90-day threshold.
-fn report_stale_runtimes(layout: &Layout, index: &ComponentIndex) -> Result<()> {
-    let usage: std::collections::HashMap<String, i64> = index
-        .usage_by_version()?
-        .into_iter()
-        .map(|u| (u.version, u.last_used))
-        .collect();
-    if usage.is_empty() {
-        return Ok(()); // no observations yet — can't judge staleness
-    }
-
-    let threshold_days: i64 = std::env::var("WVM_STALE_DAYS")
-        .ok()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(90);
-    let now = now_epoch();
-    let seed = seed_version(layout);
-    let default_resolved =
-        discovery::default_version(layout).and_then(|s| discovery::resolve_installed(layout, &s));
-
-    let mut stale: Vec<(String, String)> = Vec::new();
-    for v in installed_versions(layout)? {
-        if seed.as_deref() == Some(v.as_str()) || default_resolved.as_deref() == Some(v.as_str()) {
-            continue;
-        }
-        if !index.apps_using(&v).unwrap_or_default().is_empty() {
-            continue;
-        }
-        match usage.get(v.as_str()) {
-            Some(&t) => {
-                let age = (now - t) / 86400;
-                if age >= threshold_days {
-                    stale.push((v, format!("last used {age}d ago")));
-                }
-            }
-            None => stale.push((v, "never used".to_string())),
-        }
-    }
-
-    if !stale.is_empty() {
-        println!("\nStale runtimes (unused ≥ {threshold_days}d; not seed/default/app-required):");
-        for (v, note) in stale {
-            println!("  {v}   {note}   → wvm uninstall {v}");
-        }
-    }
-    Ok(())
-}
-
-pub fn objects() -> Result<()> {
-    let layout = Layout::discover()?;
-    let mut index = open_index(&layout)?;
-    reindex(&mut index, &layout)?;
-
-    let stats = index.stats()?;
-    let all = index.all_objects()?;
-    if all.is_empty() {
-        println!("Store is empty.");
-        return Ok(());
-    }
-    println!(
-        "Objects ({} total, {} referenced, {})",
-        stats.objects,
-        stats.referenced,
-        human_bytes(stats.total_size.max(0) as u64)
-    );
-    for (digest, size) in all {
-        let refs = index.backlinks(&digest)?;
-        let who = if refs.is_empty() {
-            "(unreferenced)".to_string()
-        } else {
-            refs.iter()
-                .map(|(rt, ver)| format!("{rt}@{ver}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-        println!(
-            "  {}  {:>10}  {who}",
-            &digest[..12],
-            human_bytes(size.max(0) as u64)
-        );
-    }
-    Ok(())
-}
-
 // --- helpers -------------------------------------------------------------
 
 /// `wvm register <app-dir>` — read the app's `wvm.toml` `[app]` manifest and
@@ -574,8 +475,8 @@ pub fn register(app_dir: &str) -> Result<()> {
     let dir = Path::new(app_dir);
     let manifest = AppManifest::read_dir(dir)?;
 
-    let mut index = open_index(&layout)?;
-    index.register_app(
+    wvm_core::apps::register(
+        &layout,
         &manifest.name,
         Some(app_dir),
         manifest.runtime_path.as_deref(),
@@ -603,8 +504,7 @@ pub fn register(app_dir: &str) -> Result<()> {
 /// `wvm unregister <name>` — drop an application's registration.
 pub fn unregister(name: &str) -> Result<()> {
     let layout = Layout::discover()?;
-    let mut index = open_index(&layout)?;
-    if index.unregister_app(name)? {
+    if wvm_core::apps::unregister(&layout, name)? {
         println!("Unregistered application '{name}'");
     } else {
         bail!("no application named '{name}' is registered");
@@ -616,10 +516,9 @@ pub fn unregister(name: &str) -> Result<()> {
 /// pass-through shim (transparent tracking; no app registration required).
 pub fn usage(limit: i64) -> Result<()> {
     let layout = Layout::discover()?;
-    let mut index = open_index(&layout)?;
-    ingest_usage_log(&mut index, &layout)?;
+    let entries = usage::read(&layout)?;
 
-    let by_version = index.usage_by_version()?;
+    let by_version = usage::by_version(&entries);
     if by_version.is_empty() {
         println!("No runtime usage recorded yet.");
         println!(
@@ -650,7 +549,7 @@ pub fn usage(limit: i64) -> Result<()> {
     );
 
     // Recent invocations, one row each.
-    let recent = index.recent_usage(limit)?;
+    let recent = usage::recent(&entries, limit.max(0) as usize);
     if !recent.is_empty() {
         println!();
         println!("Recent invocations (newest first):");
@@ -752,9 +651,8 @@ fn humanize_ago(now: i64, then: i64) -> String {
 /// `wvm apps` — list registered applications and the runtimes they depend on.
 pub fn apps() -> Result<()> {
     let layout = Layout::discover()?;
-    let mut index = open_index(&layout)?;
-    ingest_usage_log(&mut index, &layout)?;
-    let apps = index.list_apps()?;
+    let mut apps = wvm_core::apps::read(&layout)?;
+    apps.sort_by(|a, b| a.name.cmp(&b.name));
     if apps.is_empty() {
         println!("No applications registered yet.");
         println!(

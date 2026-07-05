@@ -2,8 +2,10 @@
 //!
 //! The `shims/wasmtime` pass-through appends one JSON line per invocation to
 //! `usage.log`, then execs the real runtime. This is deliberately cheap — a
-//! single append on the hot path, no database, no WASM boot. The app later
-//! [`drain`]s the log into the SQLite `usage` table (see `index::ingest_usage_log`).
+//! single append on the hot path, no database, no WASM boot. `usage.log` *is*
+//! the usage store: reads parse it directly and everything else (per-version
+//! rollups, recent invocations) is derived from those entries. To keep the file
+//! bounded it is compacted on read to the most recent [`CAP`] entries.
 //!
 //! Observation complements registration: an app needs to do nothing (not even
 //! know wvm exists) to be seen here — it just calls `wasmtime`.
@@ -12,6 +14,18 @@ use crate::layout::Layout;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::io::Write;
+
+/// Maximum number of entries retained in `usage.log`; older ones are dropped
+/// when the log is compacted on read.
+const CAP: usize = 10_000;
+
+/// Observed-usage rollup for one runtime version.
+#[derive(Debug, Clone)]
+pub struct VersionUsage {
+    pub version: String,
+    pub count: i64,
+    pub last_used: i64,
+}
 
 /// An `[app]` manifest discovered at (or above) an invocation's working
 /// directory. Carried on a [`UsageEntry`] so the app can auto-register the
@@ -87,28 +101,62 @@ pub fn record(layout: &Layout, entry: &UsageEntry) -> Result<()> {
     Ok(())
 }
 
-/// Atomically take everything currently in the log and return it, leaving a
-/// fresh (empty) log for concurrent appenders. Renames the log aside first so a
-/// shim appending mid-ingest writes to the new file rather than losing a line.
-/// Unparseable lines are skipped.
-pub fn drain(layout: &Layout) -> Result<Vec<UsageEntry>> {
+/// Read every recorded invocation from `usage.log`. Unparseable lines are
+/// skipped. When the log holds more than [`CAP`] entries it is compacted in
+/// place — rewritten to just the most recent `CAP` — and the retained entries
+/// are returned.
+pub fn read(layout: &Layout) -> Result<Vec<UsageEntry>> {
     let path = layout.usage_log();
-    if !path.exists() {
-        return Ok(Vec::new());
-    }
-    let taken = path.with_extension("log.ingesting");
-    // If a previous ingest was interrupted, fold its leftovers in too.
-    if taken.exists() {
-        let _ = std::fs::remove_file(&taken);
-    }
-    std::fs::rename(&path, &taken).with_context(|| format!("rotating {}", path.display()))?;
-
-    let text = std::fs::read_to_string(&taken).unwrap_or_default();
-    let entries = text
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(_) => return Ok(Vec::new()),
+    };
+    let mut entries: Vec<UsageEntry> = text
         .lines()
         .filter(|l| !l.trim().is_empty())
         .filter_map(|l| serde_json::from_str::<UsageEntry>(l).ok())
         .collect();
-    let _ = std::fs::remove_file(&taken);
+
+    if entries.len() > CAP {
+        entries.drain(..entries.len() - CAP);
+        let mut out = String::new();
+        for e in &entries {
+            if let Ok(line) = serde_json::to_string(e) {
+                out.push_str(&line);
+                out.push('\n');
+            }
+        }
+        std::fs::write(&path, out).with_context(|| format!("compacting {}", path.display()))?;
+    }
     Ok(entries)
+}
+
+/// Per-version rollup of `entries`: invocation count and last-used timestamp,
+/// most recently used first.
+pub fn by_version(entries: &[UsageEntry]) -> Vec<VersionUsage> {
+    use std::collections::HashMap;
+    let mut map: HashMap<&str, (i64, i64)> = HashMap::new();
+    for e in entries {
+        let slot = map.entry(e.version.as_str()).or_insert((0, i64::MIN));
+        slot.0 += 1;
+        slot.1 = slot.1.max(e.invoked_at);
+    }
+    let mut out: Vec<VersionUsage> = map
+        .into_iter()
+        .map(|(version, (count, last_used))| VersionUsage {
+            version: version.to_string(),
+            count,
+            last_used,
+        })
+        .collect();
+    out.sort_by_key(|u| std::cmp::Reverse(u.last_used));
+    out
+}
+
+/// The `limit` most recent invocations, newest first (stable on ties).
+pub fn recent(entries: &[UsageEntry], limit: usize) -> Vec<UsageEntry> {
+    let mut ordered: Vec<UsageEntry> = entries.to_vec();
+    ordered.sort_by_key(|e| std::cmp::Reverse(e.invoked_at));
+    ordered.truncate(limit);
+    ordered
 }

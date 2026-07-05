@@ -24,8 +24,6 @@ const COMMANDS: &[(&str, &str)] = &[
     ("usage", "Show runtime invocations"),
     ("uninstall", "Remove an installed runtime"),
     ("verify", "Validate installation integrity"),
-    ("gc", "Reclaim unreferenced store objects"),
-    ("objects", "List stored objects"),
     ("completions", "Print a shell completion script"),
     ("help", "Show help"),
 ];
