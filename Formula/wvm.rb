@@ -12,28 +12,28 @@
 class Wvm < Formula
   desc "Wasmtime Version Manager — installs and manages Wasmtime runtimes"
   homepage "https://github.com/tegmentum/wvm"
-  version "0.5.0"
+  version "0.5.1"
   license "Apache-2.0"
 
   on_macos do
     on_arm do
       url "https://github.com/tegmentum/wvm/releases/download/v#{version}/wvm-aarch64-macos"
-      sha256 "a06a36e08382db48e8db0e4a15327638257e508f7583e7ae7e445929da6f4533"
+      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
     on_intel do
       url "https://github.com/tegmentum/wvm/releases/download/v#{version}/wvm-x86_64-macos"
-      sha256 "4c34d0db8f5285bbf46848ea06114802351bb57126edb9c3c2671ad9d62cb183"
+      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
   end
 
   on_linux do
     on_arm do
       url "https://github.com/tegmentum/wvm/releases/download/v#{version}/wvm-aarch64-linux"
-      sha256 "f943b3bd5e2f20f4ff156b02bb53f46bd23b07445b8b6cfe020b0dac9b8651ab"
+      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
     on_intel do
       url "https://github.com/tegmentum/wvm/releases/download/v#{version}/wvm-x86_64-linux"
-      sha256 "a6cda4c4ec23eebf8f2375b1138c0a47a85457b5ef436544fd7dd9887c604ff3"
+      sha256 "0000000000000000000000000000000000000000000000000000000000000000"
     end
   end
 

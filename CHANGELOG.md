@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.5.1
+
+### Fixed
+
+- `brew install wvm` now installs bash/zsh/fish completions automatically
+  via `generate_completions_from_executable`. Restores the exec bit on the
+  binary first, since GitHub's release download strips it (#1).
+
+### Changed
+
+- Release workflow cross-compiles the x86_64 macOS binary on the arm runner
+  and publishes all four assets in a single job, so a single flaky runner
+  can't leave the release half-published.
+
 ## 0.5.0
 
 Operational hardening: the seed runtime can be updated, a `doctor` command,
