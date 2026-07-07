@@ -38,8 +38,15 @@ class Wvm < Formula
   end
 
   def install
-    # The release asset is a bare binary named wvm-<arch>-<os>.
+    # The release asset is a bare binary named wvm-<arch>-<os>. GitHub's
+    # release download loses the exec bit, so restore it before running the
+    # binary to generate completions below.
     bin.install Dir["wvm-*"].first => "wvm"
+    chmod 0755, bin/"wvm"
+    # Emit and install completion scripts. `wvm completions <shell>` prints
+    # the script to stdout — Homebrew's helper takes care of putting each
+    # generated file in the right per-shell location.
+    generate_completions_from_executable(bin/"wvm", "completions")
   end
 
   def caveats
